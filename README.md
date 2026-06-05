@@ -6,7 +6,31 @@
 A lightweight, **self-contained** CLI that extracts structured text from images and multi-page PDFs using the **GLM-OCR** model.
 
 > [!IMPORTANT]
-> This tool is designed to work with any OpenAI-compatible chat-completions endpoint (like vLLM) hosting the `zai-org/GLM-OCR` model.
+> This tool does **not** bundle the model. You must run an OpenAI-compatible inference engine (such as **vLLM**) serving the `zai-org/GLM-OCR` model, or point the CLI at an existing remote endpoint.
+
+---
+
+## 📋 Prerequisites
+
+### Inference Engine
+
+The CLI sends rendered page images to a chat-completions endpoint. By default it expects the server at `http://localhost:8080`.
+
+**Quick start with vLLM (recommended):**
+
+```bash
+python -m vllm.entrypoints.openai.api_server \
+  --model zai-org/GLM-OCR \
+  --port 8080
+```
+
+**Remote server:**
+
+If the engine runs on another host, pass `-embed` so images are sent as base64 data-URIs instead of relying on the server reading your local filesystem:
+
+```bash
+ocr -embed -endpoint http://10.0.0.5:8080 document.pdf
+```
 
 ---
 
