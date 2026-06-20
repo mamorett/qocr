@@ -34,6 +34,36 @@ vllm serve zai-org/GLM-OCR \
   --speculative-config '{"method": "mtp", "num_speculative_tokens": 1}'
 ```
 
+**Quick start with Ollama:**
+
+If you are using **Ollama** (which runs on port `11434` by default), you can run GLM-OCR locally. 
+
+> [!WARNING]
+> By default, Ollama configures model instances with a small context window (`num_ctx 2048`) and output generation limit (`num_predict 128`).
+> High-resolution images (like the default 200 DPI PDF renders) translate to a high number of visual tokens, filling up the default context window and causing Ollama to truncate its responses early.
+> 
+> To run with Ollama, you have two options:
+> 
+> * **Option A (Zero-Setup Sweetspot):** Just run the CLI with a lower resolution of **`-dpi 75`** (requires no changes to Ollama):
+>   ```bash
+>   ocr -endpoint http://localhost:11434 -model glm-ocr:latest -dpi 75 document.pdf
+>   ```
+> * **Option B (Use full 200 DPI):** Create a custom model in Ollama with expanded limits:
+>   1. Create a text file named `Modelfile` containing:
+>      ```dockerfile
+>      FROM glm-ocr:latest
+>      PARAMETER num_ctx 8192
+>      PARAMETER num_predict 4096
+>      ```
+>   2. Register the customized model version in Ollama:
+>      ```bash
+>      ollama create glm-ocr-large -f Modelfile
+>      ```
+>   3. Run the CLI targeting the new model and Ollama endpoint:
+>      ```bash
+>      ocr -endpoint http://localhost:11434 -model glm-ocr-large document.pdf
+>      ```
+
 **Remote server:**
 
 If the engine runs on another host, simply specify the endpoint. Images are automatically embedded and sent as base64 data-URIs:
