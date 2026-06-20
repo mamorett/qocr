@@ -1,11 +1,14 @@
 package main
 
 import (
-	_ "embed"
-	"fmt"
-	"image/jpeg"
 	"bytes"
+	_ "embed"
 	"encoding/base64"
+	"fmt"
+	"image"
+	imgcolor "image/color"
+	"image/draw"
+	"image/png"
 	"os"
 	"time"
 
@@ -85,12 +88,18 @@ func renderPDFToDataURIs(path string, dpi int) ([]string, error) {
 			return nil, fmt.Errorf("rendering page %d: %w", i, err)
 		}
 
+		// Ensure the image has a solid white background (in case of transparent PDF pages)
+		bounds := resp.Result.Image.Bounds()
+		imgWithBg := image.NewRGBA(bounds)
+		draw.Draw(imgWithBg, bounds, &image.Uniform{imgcolor.White}, image.Point{}, draw.Src)
+		draw.Draw(imgWithBg, bounds, resp.Result.Image, image.Point{}, draw.Over)
+
 		var buf bytes.Buffer
-		if err := jpeg.Encode(&buf, resp.Result.Image, &jpeg.Options{Quality: 90}); err != nil {
-			return nil, fmt.Errorf("encoding page %d to JPEG: %w", i, err)
+		if err := png.Encode(&buf, imgWithBg); err != nil {
+			return nil, fmt.Errorf("encoding page %d to PNG: %w", i, err)
 		}
 
-		dataURI := fmt.Sprintf("data:image/jpeg;base64,%s",
+		dataURI := fmt.Sprintf("data:image/png;base64,%s",
 			base64.StdEncoding.EncodeToString(buf.Bytes()))
 		dataURIs = append(dataURIs, dataURI)
 	}

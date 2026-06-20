@@ -47,8 +47,10 @@ type Message struct {
 }
 
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Temperature float64   `json:"temperature,omitempty"`
 }
 
 type Choice struct {
@@ -350,6 +352,8 @@ func callAPI(apiURL, model, promptText string, imageURIs []string) (*ChatRespons
 			Role:    "user",
 			Content: content,
 		}},
+		MaxTokens:   16384,
+		Temperature: 0.1,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshalling request: %w", err)
