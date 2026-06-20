@@ -40,27 +40,27 @@ func initPDFium() error {
 	return nil
 }
 
-func renderPDFToDataURIs(path string, dpi int) ([]string, error) {
+func getPDFPageCount(path string) (int, error) {
 	if err := initPDFium(); err != nil {
-		return nil, err
+		return 0, err
 	}
 
 	instance, err := pdfiumPool.GetInstance(time.Minute)
 	if err != nil {
-		return nil, fmt.Errorf("getting PDFium instance: %w", err)
+		return 0, fmt.Errorf("getting PDFium instance: %w", err)
 	}
 	defer instance.Close()
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading PDF: %w", err)
+		return 0, fmt.Errorf("reading PDF: %w", err)
 	}
 
 	doc, err := instance.OpenDocument(&requests.OpenDocument{
 		File: &data,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("opening PDF document: %w", err)
+		return 0, fmt.Errorf("opening PDF document: %w", err)
 	}
 	defer instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{
 		Document: doc.Document,
@@ -70,39 +70,62 @@ func renderPDFToDataURIs(path string, dpi int) ([]string, error) {
 		Document: doc.Document,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getting page count: %w", err)
+		return 0, fmt.Errorf("getting page count: %w", err)
 	}
 
-	var dataURIs []string
-	for i := 0; i < pageCount.PageCount; i++ {
-		resp, err := instance.RenderPageInDPI(&requests.RenderPageInDPI{
-			Page: requests.Page{
-				ByIndex: &requests.PageByIndex{
-					Document: doc.Document,
-					Index:    i,
-				},
+	return pageCount.PageCount, nil
+}
+
+func renderPDFPageToDataURI(path string, index int, dpi int) (string, error) {
+	if err := initPDFium(); err != nil {
+		return "", err
+	}
+
+	instance, err := pdfiumPool.GetInstance(time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("getting PDFium instance: %w", err)
+	}
+	defer instance.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading PDF: %w", err)
+	}
+
+	doc, err := instance.OpenDocument(&requests.OpenDocument{
+		File: &data,
+	})
+	if err != nil {
+		return "", fmt.Errorf("opening PDF document: %w", err)
+	}
+	defer instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{
+		Document: doc.Document,
+	})
+
+	resp, err := instance.RenderPageInDPI(&requests.RenderPageInDPI{
+		Page: requests.Page{
+			ByIndex: &requests.PageByIndex{
+				Document: doc.Document,
+				Index:    index,
 			},
-			DPI: dpi,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("rendering page %d: %w", i, err)
-		}
+		},
+		DPI: dpi,
+	})
+	if err != nil {
+		return "", fmt.Errorf("rendering page %d: %w", index, err)
+	}
+	defer resp.Cleanup()
 
-		// Ensure the image has a solid white background (in case of transparent PDF pages)
-		bounds := resp.Result.Image.Bounds()
-		imgWithBg := image.NewRGBA(bounds)
-		draw.Draw(imgWithBg, bounds, &image.Uniform{imgcolor.White}, image.Point{}, draw.Src)
-		draw.Draw(imgWithBg, bounds, resp.Result.Image, image.Point{}, draw.Over)
+	bounds := resp.Result.Image.Bounds()
+	imgWithBg := image.NewRGBA(bounds)
+	draw.Draw(imgWithBg, bounds, &image.Uniform{imgcolor.White}, image.Point{}, draw.Src)
+	draw.Draw(imgWithBg, bounds, resp.Result.Image, image.Point{}, draw.Over)
 
-		var buf bytes.Buffer
-		if err := png.Encode(&buf, imgWithBg); err != nil {
-			return nil, fmt.Errorf("encoding page %d to PNG: %w", i, err)
-		}
-
-		dataURI := fmt.Sprintf("data:image/png;base64,%s",
-			base64.StdEncoding.EncodeToString(buf.Bytes()))
-		dataURIs = append(dataURIs, dataURI)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, imgWithBg); err != nil {
+		return "", fmt.Errorf("encoding page %d: %w", index, err)
 	}
 
-	return dataURIs, nil
+	return fmt.Sprintf("data:image/png;base64,%s",
+		base64.StdEncoding.EncodeToString(buf.Bytes())), nil
 }

@@ -469,24 +469,16 @@ Examples:
 	}
 	apiURL := base + "/v1/chat/completions"
 
-	var imageURIs []string
+	var totalPages int
 	isPDF := strings.ToLower(filepath.Ext(inputFile)) == ".pdf"
-
 	if isPDF {
-		fmt.Fprintf(os.Stderr, "  %s Rendering PDF to images (%d DPI)...", color(colorCyan, "⏳"), *dpi)
 		var err error
-		imageURIs, err = renderPDFToDataURIs(inputFile, *dpi)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n")
-			return fmt.Errorf("rendering PDF: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "\r\033[K  %s Rendered %d PDF pages successfully\n", color(colorGreen, "✔"), len(imageURIs))
-	} else {
-		uri, err := toDataURI(inputFile)
+		totalPages, err = getPDFPageCount(inputFile)
 		if err != nil {
 			return err
 		}
-		imageURIs = []string{uri}
+	} else {
+		totalPages = 1
 	}
 
 	var resumePath string
@@ -506,7 +498,7 @@ Examples:
 	fmt.Fprintf(os.Stderr, "  %s\n", color(colorBold+colorCyan, "GLM-OCR CLIENT — DOCUMENT DIGITIZATION"))
 	fmt.Fprintf(os.Stderr, "%s\n", color(colorDim, "─────────────────────────────────────────────────────────────────"))
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Input file:", color(colorWhite, inputFile))
-	fmt.Fprintf(os.Stderr, "  %s %-15s %d page(s)\n", color(colorBold+colorCyan, "•"), "Pages:", len(imageURIs))
+	fmt.Fprintf(os.Stderr, "  %s %-15s %d page(s)\n", color(colorBold+colorCyan, "•"), "Pages:", totalPages)
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Model:", color(colorWhite, *model))
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Endpoint:", color(colorWhite, base))
 	if *outputFile != "" {
@@ -516,7 +508,7 @@ Examples:
 	}
 	if *resume {
 		if resumeState != nil && len(resumeState.Pages) > 0 {
-			fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Resume status:", fmt.Sprintf("%s (restoring %d/%d pages)", color(colorYellow, "Interrupted session found"), len(resumeState.Pages), len(imageURIs)))
+			fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Resume status:", fmt.Sprintf("%s (restoring %d/%d pages)", color(colorYellow, "Interrupted session found"), len(resumeState.Pages), totalPages))
 		} else {
 			fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Resume status:", color(colorGreen, "Ready (enabled)"))
 		}
@@ -529,7 +521,7 @@ Examples:
 
 	var allPages [][]OCRBlock
 	startTime := time.Now()
-	for i, uri := range imageURIs {
+	for i := 0; i < totalPages; i++ {
 		var content string
 		var found bool
 		
@@ -538,9 +530,25 @@ Examples:
 		}
 		
 		if found {
-			fmt.Fprintf(os.Stderr, "  %s Page %d/%d: %s\n", color(colorGreen, "⏮"), i+1, len(imageURIs), color(colorDim, "restored from cache"))
+			fmt.Fprintf(os.Stderr, "  %s Page %d/%d: %s\n", color(colorGreen, "⏮"), i+1, totalPages, color(colorDim, "restored from cache (rendering skipped)"))
 		} else {
-			fmt.Fprintf(os.Stderr, "  %s Page %d/%d: %s\r", color(colorCyan, "⏳"), i+1, len(imageURIs), color(colorDim, "recognizing..."))
+			var uri string
+			var err error
+			if isPDF {
+				fmt.Fprintf(os.Stderr, "  %s Page %d/%d: %s\r", color(colorCyan, "⏳"), i+1, totalPages, color(colorDim, "rendering page..."))
+				uri, err = renderPDFPageToDataURI(inputFile, i, *dpi)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\n")
+					return err
+				}
+			} else {
+				uri, err = toDataURI(inputFile)
+				if err != nil {
+					return err
+				}
+			}
+
+			fmt.Fprintf(os.Stderr, "  %s Page %d/%d: %s\r", color(colorCyan, "⏳"), i+1, totalPages, color(colorDim, "recognizing..."))
 			
 			pageStart := time.Now()
 			cr, err := callAPI(apiURL, *model, *prompt, []string{uri})
@@ -582,7 +590,7 @@ Examples:
 				}
 			}
 			
-			fmt.Fprintf(os.Stderr, "\r\033[K  %s Page %d/%d: %s\n", color(colorGreen, "✔"), i+1, len(imageURIs), color(colorGreen, fmt.Sprintf("completed in %s", duration)))
+			fmt.Fprintf(os.Stderr, "\r\033[K  %s Page %d/%d: %s\n", color(colorGreen, "✔"), i+1, totalPages, color(colorGreen, fmt.Sprintf("completed in %s", duration)))
 		}
 		
 		if *rawMode {
