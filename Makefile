@@ -11,9 +11,19 @@ PLATFORMS := \
 	windows/amd64 \
 	windows/arm64
 
-.PHONY: all clean
+.PHONY: default build-all install clean $(PLATFORMS)
 
-all: $(PLATFORMS)
+default:
+	$(eval OS := $(shell go env GOOS))
+	$(eval ARCH := $(shell go env GOARCH))
+	$(eval EXT := $(if $(filter windows,$(OS)),.exe,))
+	@echo "Building for current platform ($(OS)/$(ARCH))…"
+	@mkdir -p dist
+	GOOS=$(OS) GOARCH=$(ARCH) CGO_ENABLED=0 \
+		go build -ldflags="$(LDFLAGS)" \
+		-o dist/$(APP)$(EXT) .
+
+build-all: $(PLATFORMS)
 
 $(PLATFORMS):
 	$(eval OS   := $(word 1,$(subst /, ,$@)))
@@ -24,6 +34,13 @@ $(PLATFORMS):
 	GOOS=$(OS) GOARCH=$(ARCH) CGO_ENABLED=0 \
 		go build -ldflags="$(LDFLAGS)" \
 		-o dist/$(APP)-$(OS)-$(ARCH)$(EXT) .
+
+install: default
+	$(eval OS := $(shell go env GOOS))
+	$(eval EXT := $(if $(filter windows,$(OS)),.exe,))
+	@echo "Installing to $(shell go env GOPATH)/bin/$(APP)$(EXT)…"
+	@mkdir -p $(shell go env GOPATH)/bin
+	@cp dist/$(APP)$(EXT) $(shell go env GOPATH)/bin/$(APP)$(EXT)
 
 clean:
 	rm -rf dist/

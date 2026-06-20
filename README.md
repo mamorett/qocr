@@ -1,5 +1,13 @@
 # 📄 GLM-OCR CLI
 
+```text
+  ____ _     __  __          ___   ____ ____  
+ / ___| |   |  \/  |        / _ \ / ___|  _ \ 
+| |  _| |   | |\/| | _____ | | | | |   | |_) |
+| |_| | |___| |  | ||_____|| |_| | |___|  _ < 
+ \____|_____|_|  |_|        \___/ \____|_| \_\
+```
+
 [![Go Report Card](https://goreportcard.com/badge/github.com/mamorett/glm-ocr)](https://goreportcard.com/report/github.com/mamorett/glm-ocr)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -51,14 +59,14 @@ ocr -embed -endpoint http://10.0.0.5:8080 document.pdf
 Ensure you have **Go 1.25+** installed.
 
 ```bash
-# Clone and build for your current platform
-go build -o ocr .
+# Build for your current platform (default target)
+make
 
-# Cross-compile for all supported platforms
-make all
+# Cross-compile for all supported platforms (linux, darwin, windows for amd64 & arm64)
+make build-all
 ```
 
-The resulting binaries will be in the `dist/` folder.
+The resulting binaries will be placed in the `dist/` folder.
 
 ---
 
@@ -79,6 +87,7 @@ ocr [options] <file>
 | `-prompt` | Instruction sent with the file | `Extract all text from this document` |
 | `-output` | Write output to file instead of stdout | `stdout` |
 | `-dpi` | PDF rendering resolution | `200` |
+| `-resume` | Resume previous execution if interrupted | `true` |
 | `-markdown` | Output as Markdown | `true` |
 | `-text` | Output as plain text (flattens tables) | `false` |
 | `-json` | Output as structured JSON | `false` |
@@ -120,8 +129,9 @@ ocr -json -output result.json document.pdf
 The **GLM-OCR** model requires images as input. Since it cannot process raw PDF blobs directly, this CLI performs the following steps:
 
 1. **PDF Rendering**: Uses `go-pdfium` running on the `wazero` WebAssembly engine to render PDF pages into images. The default is **200 DPI**, which is optimal for balance between speed and OCR quality.
-2. **Sequential Processing**: To ensure reliability and avoid overwhelming the GPU or hitting context limits, pages are processed one by one. The CLI prints real-time progress for each page.
-3. **Structured Parsing**: The results are combined and parsed into the chosen format. If the model returns mixed content, the CLI extracts the JSON part automatically.
+2. **Sequential Processing**: To ensure reliability and avoid overwhelming the GPU or hitting context limits, pages are processed one by one. The CLI prints a beautiful, color-coded real-time dashboard of current progress and timing.
+3. **Automatic Resuming**: If `-resume` is enabled, the CLI computes a unique SHA-256 hash representing the input file (path, size, modification time) and API parameters. Every successfully processed page is saved locally to your system cache directory (`~/.cache/ocr-cli/` or equivalent). If interrupted, re-running the same command will restore all cached pages and skip API calls, resuming right where it left off. Cache files are cleaned up upon successful completion.
+4. **Structured Parsing**: The results are combined and parsed into the chosen format. If the model returns mixed content, the CLI extracts the JSON part automatically.
 
 ---
 

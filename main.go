@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -15,6 +17,13 @@ import (
 )
 
 const defaultPrompt = "Extract all text from this document"
+
+const asciiArt = `
+  ____ _     __  __          ___   ____ ____  
+ / ___| |   |  \/  |        / _ \ / ___|  _ \ 
+| |  _| |   | |\/| | _____ | | | | |   | |_) |
+| |_| | |___| |  | ||_____|| |_| | |___|  _ < 
+ \____|_____|_|  |_|        \___/ \____|_| \_\`
 
 var version = "dev"
 
@@ -401,8 +410,10 @@ func run(args []string) error {
 	rawMode    := fs.Bool("raw", false, "Dump raw model response and exit (debug)")
 	showVer    := fs.Bool("version", false, "Print version and exit")
 	dpi        := fs.Int("dpi", 200, "Rendering resolution for PDF pages")
+	resume     := fs.Bool("resume", true, "Resume previous execution if interrupted")
 
 	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, color(colorBold+colorCyan, asciiArt))
 		fmt.Fprintf(os.Stderr, "ocr %s\n\nUsage: ocr [options] <file>\n\nOptions:\n", version)
 		fs.PrintDefaults()
 		fmt.Fprintln(os.Stderr, `
@@ -447,9 +458,12 @@ Examples:
 	}
 
 	inputFile := files[0]
-	if _, err := os.Stat(inputFile); err != nil {
+	fileInfo, err := os.Stat(inputFile)
+	if err != nil {
 		return fmt.Errorf("cannot access %q: %w", inputFile, err)
 	}
+	modTime := fileInfo.ModTime().UnixNano()
+	size := fileInfo.Size()
 
 	base := strings.TrimRight(*endpoint, "/")
 	if *port != 0 {
@@ -464,12 +478,14 @@ Examples:
 	isPDF := strings.ToLower(filepath.Ext(inputFile)) == ".pdf"
 
 	if isPDF {
-		fmt.Fprintf(os.Stderr, "→ rendering PDF to images (%d DPI)...\n", *dpi)
+		fmt.Fprintf(os.Stderr, "  %s Rendering PDF to images (%d DPI)...", color(colorCyan, "⏳"), *dpi)
 		var err error
 		imageURIs, err = renderPDFToDataURIs(inputFile, *dpi)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "\n")
 			return fmt.Errorf("rendering PDF: %w", err)
 		}
+		fmt.Fprintf(os.Stderr, "\r\033[K  %s Rendered %d PDF pages successfully\n", color(colorGreen, "✔"), len(imageURIs))
 	} else {
 		var uri string
 		var err error
@@ -489,44 +505,121 @@ Examples:
 		imageURIs = []string{uri}
 	}
 
-	fmt.Fprintf(os.Stderr, "→ POST %s [model: %s] [total: %d page(s)]\n", apiURL, *model, len(imageURIs))
+	var resumePath string
+	var resumeState *ResumeState
+	if *resume {
+		hash, err := getResumeHash(inputFile, modTime, size, *prompt, *model, *dpi, apiURL)
+		if err == nil {
+			resumePath, err = getResumeFilePath(hash)
+			if err == nil {
+				resumeState, _ = loadResumeState(resumePath)
+			}
+		}
+	}
+
+	// Print ASCII art and dashboard
+	fmt.Fprintln(os.Stderr, color(colorBold+colorCyan, asciiArt))
+	fmt.Fprintf(os.Stderr, "  %s\n", color(colorBold+colorCyan, "GLM-OCR CLIENT — DOCUMENT DIGITIZATION"))
+	fmt.Fprintf(os.Stderr, "%s\n", color(colorDim, "─────────────────────────────────────────────────────────────────"))
+	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Input file:", color(colorWhite, inputFile))
+	fmt.Fprintf(os.Stderr, "  %s %-15s %d page(s)\n", color(colorBold+colorCyan, "•"), "Pages:", len(imageURIs))
+	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Model:", color(colorWhite, *model))
+	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Endpoint:", color(colorWhite, base))
+	if *outputFile != "" {
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Output file:", color(colorWhite, *outputFile))
+	} else {
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Output file:", color(colorDim, "Stdout"))
+	}
+	if *resume {
+		if resumeState != nil && len(resumeState.Pages) > 0 {
+			fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Resume status:", fmt.Sprintf("%s (restoring %d/%d pages)", color(colorYellow, "Interrupted session found"), len(resumeState.Pages), len(imageURIs)))
+		} else {
+			fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Resume status:", color(colorGreen, "Ready (enabled)"))
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Resume status:", color(colorDim, "Disabled"))
+	}
+	fmt.Fprintf(os.Stderr, "%s\n\n", color(colorDim, "─────────────────────────────────────────────────────────────────"))
+
+	fmt.Fprintf(os.Stderr, "%s\n", color(colorBold, "Processing pages:"))
 
 	var allPages [][]OCRBlock
+	startTime := time.Now()
 	for i, uri := range imageURIs {
-		if len(imageURIs) > 1 {
-			fmt.Fprintf(os.Stderr, "  → processing page %d/%d...\n", i+1, len(imageURIs))
+		var content string
+		var found bool
+		
+		if *resume && resumeState != nil {
+			content, found = findCachedPage(resumeState, i)
 		}
 		
-		cr, err := callAPI(apiURL, *model, *prompt, []string{uri})
-		if err != nil {
-			return fmt.Errorf("API call for page %d: %w", i+1, err)
+		if found {
+			fmt.Fprintf(os.Stderr, "  %s Page %d/%d: %s\n", color(colorGreen, "⏮"), i+1, len(imageURIs), color(colorDim, "restored from cache"))
+		} else {
+			fmt.Fprintf(os.Stderr, "  %s Page %d/%d: %s\r", color(colorCyan, "⏳"), i+1, len(imageURIs), color(colorDim, "recognizing..."))
+			
+			pageStart := time.Now()
+			cr, err := callAPI(apiURL, *model, *prompt, []string{uri})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "\n")
+				return fmt.Errorf("API call for page %d: %w", i+1, err)
+			}
+			if cr.Error != nil {
+				fmt.Fprintf(os.Stderr, "\n")
+				return fmt.Errorf("API error on page %d: %s", i+1, cr.Error.Message)
+			}
+			if len(cr.Choices) == 0 {
+				fmt.Fprintf(os.Stderr, "\n")
+				return fmt.Errorf("no choices on page %d", i+1)
+			}
+			
+			content = cr.Choices[0].Message.Content
+			duration := time.Since(pageStart).Round(100 * time.Millisecond)
+			
+			if *resume && resumePath != "" {
+				if resumeState == nil {
+					resumeState = &ResumeState{
+						InputFile:  inputFile,
+						ModTime:    modTime,
+						Size:       size,
+						Prompt:     *prompt,
+						Model:      *model,
+						DPI:        *dpi,
+						APIURL:     apiURL,
+						Pages:      []PageState{},
+					}
+				}
+				resumeState.Pages = append(resumeState.Pages, PageState{
+					PageIndex: i,
+					Content:   content,
+				})
+				if err := saveResumeState(resumePath, resumeState); err != nil {
+					fmt.Fprintf(os.Stderr, "\n%s Failed to save resume state: %v\n", color(colorYellow, "⚠️"), err)
+				}
+			}
+			
+			fmt.Fprintf(os.Stderr, "\r\033[K  %s Page %d/%d: %s\n", color(colorGreen, "✔"), i+1, len(imageURIs), color(colorGreen, fmt.Sprintf("completed in %s", duration)))
 		}
-		if cr.Error != nil {
-			return fmt.Errorf("API error on page %d: %s", i+1, cr.Error.Message)
-		}
-		if len(cr.Choices) == 0 {
-			return fmt.Errorf("no choices on page %d", i+1)
-		}
-
-		content := cr.Choices[0].Message.Content
+		
 		if *rawMode {
 			fmt.Println(content)
 			continue
 		}
-
+		
 		pages, _ := parseOCRContent(content)
-		// We expect parseOCRContent to return exactly one page for a single image request
 		if len(pages) > 0 {
 			allPages = append(allPages, pages[0])
 		}
 	}
+
+	totalDuration := time.Since(startTime).Round(100 * time.Millisecond)
+	fmt.Fprintf(os.Stderr, "\n%s\n", color(colorDim, "─────────────────────────────────────────────────────────────────"))
 
 	if *rawMode {
 		return nil
 	}
 
 	var result string
-	var err error
 	switch {
 	case *fmtJSON:
 		result, err = renderJSON(allPages, inputFile, *model)
@@ -543,16 +636,138 @@ Examples:
 		if err := os.WriteFile(*outputFile, []byte(result+"\n"), 0644); err != nil {
 			return fmt.Errorf("writing %s: %w", *outputFile, err)
 		}
-		fmt.Fprintf(os.Stderr, "✓ written to %s\n", *outputFile)
+		fmt.Fprintf(os.Stderr, "  %s Output successfully written to: %s\n", color(colorGreen, "🎉"), color(colorBold+colorWhite, *outputFile))
+		fmt.Fprintf(os.Stderr, "  %s Total processing time: %s\n", color(colorCyan, "⏱"), totalDuration)
 	} else {
 		fmt.Println(result)
+		fmt.Fprintf(os.Stderr, "  %s Total processing time: %s\n", color(colorCyan, "⏱"), totalDuration)
 	}
+
+	// Clean up resume state
+	if *resume && resumePath != "" && resumeState != nil {
+		_ = deleteResumeState(resumePath)
+	}
+
 	return nil
 }
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%s %v\n", color(colorRed+"error:", "Error:"), err)
 		os.Exit(1)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Resume & Color visual elements
+// ---------------------------------------------------------------------------
+
+const (
+	colorReset   = "\033[0m"
+	colorBold    = "\033[1m"
+	colorDim     = "\033[2m"
+	colorItalic  = "\033[3m"
+
+	colorRed     = "\033[31m"
+	colorGreen   = "\033[32m"
+	colorYellow  = "\033[33m"
+	colorBlue    = "\033[34m"
+	colorMagenta = "\033[35m"
+	colorCyan    = "\033[36m"
+	colorWhite   = "\033[37m"
+)
+
+func isTTY(file *os.File) bool {
+	stat, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+var useColor = isTTY(os.Stderr) && os.Getenv("NO_COLOR") == ""
+
+func color(code, text string) string {
+	if !useColor {
+		return text
+	}
+	return code + text + colorReset
+}
+
+type PageState struct {
+	PageIndex int    `json:"page_index"`
+	Content   string `json:"content"`
+}
+
+type ResumeState struct {
+	InputFile string      `json:"input_file"`
+	ModTime   int64       `json:"mod_time"`
+	Size      int64       `json:"size"`
+	Prompt    string      `json:"prompt"`
+	Model     string      `json:"model"`
+	DPI       int         `json:"dpi"`
+	APIURL    string      `json:"api_url"`
+	Pages     []PageState `json:"pages"`
+}
+
+func getResumeHash(inputFile string, modTime int64, size int64, prompt, model string, dpi int, apiURL string) (string, error) {
+	absPath, err := filepath.Abs(inputFile)
+	if err != nil {
+		absPath = inputFile
+	}
+	data := fmt.Sprintf("%s|%d|%d|%s|%s|%d|%s", absPath, modTime, size, prompt, model, dpi, apiURL)
+	h := sha256.New()
+	if _, err := h.Write([]byte(data)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func getResumeFilePath(hash string) (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		cacheDir = ".ocr-cache"
+	} else {
+		cacheDir = filepath.Join(cacheDir, "ocr-cli")
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, hash+".json"), nil
+}
+
+func loadResumeState(path string) (*ResumeState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var state ResumeState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func saveResumeState(path string, state *ResumeState) error {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func deleteResumeState(path string) error {
+	return os.Remove(path)
+}
+
+func findCachedPage(state *ResumeState, index int) (string, bool) {
+	if state == nil {
+		return "", false
+	}
+	for _, p := range state.Pages {
+		if p.PageIndex == index {
+			return p.Content, true
+		}
+	}
+	return "", false
 }
