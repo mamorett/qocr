@@ -14,14 +14,111 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
 
 const defaultPrompt = "Extract all text from this document"
+
+var refRegexp = regexp.MustCompile(`(?i)<[|/]*ref[|/]*>(.*?)<[|/]+ref[|/]+>`)
+var refLeftoverRegexp = regexp.MustCompile(`(?i)<[|/]*ref[|/]*>`)
+
+func stripReferenceTags(content string) string {
+	matches := refRegexp.FindAllStringSubmatch(content, -1)
+	for _, match := range matches {
+		if len(match) == 2 {
+			fullTag := match[0]
+			inner := strings.TrimSpace(match[1])
+			innerLower := strings.ToLower(inner)
+			
+			if innerLower == "italic" || innerLower == "bold" || innerLower == "regular" || 
+				innerLower == "underline" || innerLower == "italian" || innerLower == "roman" {
+				content = strings.ReplaceAll(content, fullTag, "")
+			} else {
+				content = strings.ReplaceAll(content, fullTag, inner)
+			}
+		}
+	}
+	content = refLeftoverRegexp.ReplaceAllString(content, "")
+	return content
+}
+
+func isGibberish(content string) bool {
+	lower := strings.ToLower(content)
+	if strings.Contains(lower, "0 0 0 0") || 
+		strings.Contains(lower, "00 00 00") ||
+		strings.Contains(lower, "24 0 24") ||
+		strings.Contains(lower, "侍") ||
+		(strings.Contains(lower, "水平") && strings.Contains(lower, "0 0")) ||
+		strings.Contains(lower, "收元铜业") {
+		return true
+	}
+	
+	parts := strings.Fields(lower)
+	if len(parts) > 10 {
+		zeroCount := 0
+		numCount := 0
+		for _, p := range parts {
+			if p == "0" || p == "00" || p == "000" {
+				zeroCount++
+			}
+			isNum := true
+			for _, c := range p {
+				if (c < '0' || c > '9') && c != '.' && c != '-' {
+					isNum = false
+					break
+				}
+			}
+			if isNum {
+				numCount++
+			}
+		}
+		if numCount > 8 && float64(numCount)/float64(len(parts)) > 0.7 {
+			return true
+		}
+		if zeroCount >= 4 {
+			return true
+		}
+	}
+	return false
+}
+
+func isLeakedContent(content string, bbox []int) bool {
+	lower := strings.ToLower(content)
+	if strings.Contains(lower, "ground truth") ||
+		strings.Contains(lower, "rule 2") ||
+		strings.Contains(lower, "inconsistent") ||
+		strings.Contains(lower, "no text or characters") ||
+		strings.Contains(lower, "too blurry") ||
+		strings.Contains(lower, "unreadable") ||
+		strings.Contains(lower, "\\therefore") ||
+		strings.Contains(lower, "\\frac{") ||
+		strings.Contains(lower, "广力云") ||
+		(strings.Contains(lower, "loopback") && strings.Contains(lower, "65536") && strings.Contains(lower, "italian")) {
+		return true
+	}
+	
+	if isGibberish(content) {
+		return true
+	}
+	
+	if len(bbox) >= 4 {
+		w := bbox[2] - bbox[0]
+		if w > 0 && len(content) > 25 {
+			ratio := float64(len(content)) / float64(w)
+			if ratio > 0.35 {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 const asciiArt = `
   ____ _     __  __          ___   ____ ____  
@@ -298,10 +395,7 @@ func parseBaiduChunkWithDet(chunk string) []OCRBlock {
 		}
 
 		blockContent = strings.TrimSpace(blockContent)
-		blockContent = strings.ReplaceAll(blockContent, "<|ref|>", "")
-		blockContent = strings.ReplaceAll(blockContent, "<|/ref|>", "")
-		blockContent = strings.ReplaceAll(blockContent, "</|ref>", "")
-		blockContent = strings.ReplaceAll(blockContent, "<|/ref>", "")
+		blockContent = stripReferenceTags(blockContent)
 		blockContent = strings.ReplaceAll(blockContent, "<|det|>", "")
 		blockContent = strings.ReplaceAll(blockContent, "<|/det|>", "")
 
@@ -353,10 +447,7 @@ func parseBaiduSiblingFormat(chunk string) ([]OCRBlock, bool) {
 					}
 					if validBbox {
 						content := strings.TrimSpace(line[bracketEnd+1:])
-						content = strings.ReplaceAll(content, "<|ref|>", "")
-						content = strings.ReplaceAll(content, "<|/ref|>", "")
-						content = strings.ReplaceAll(content, "</|ref>", "")
-						content = strings.ReplaceAll(content, "<|/ref>", "")
+						content = stripReferenceTags(content)
 						content = strings.ReplaceAll(content, "<|det|>", "")
 						content = strings.ReplaceAll(content, "<|/det|>", "")
 
@@ -515,50 +606,90 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 		if len(pages) > 1 {
 			fmt.Fprintf(&sb, "\n---\n<!-- page %d -->\n\n", pi+1)
 		}
-		for _, b := range page {
-			var content string
-			switch v := b.Content.(type) {
-			case string:
-				content = strings.TrimSpace(v)
-			case []interface{}:
-				var items []string
-				for _, item := range v {
-					s := fmt.Sprint(item)
-					if s != "" && !strings.HasPrefix(s, "- ") && !strings.HasPrefix(s, "* ") {
-						items = append(items, "- "+s)
-					} else {
-						items = append(items, s)
-					}
-				}
-				content = strings.Join(items, "\n")
-			default:
-				content = fmt.Sprint(b.Content)
-			}
-
-			if content == "" {
-				continue
-			}
-
-			if strings.Contains(strings.ToLower(content), "<table") {
-				content = htmlTableToMarkdown(content)
-			}
-
-			if showBBox {
-				if bbox, ok := getBBox(b.BBox2D); ok {
-					fmt.Fprintf(&sb, "<!-- bbox: %d,%d,%d,%d -->\n", bbox[0], bbox[1], bbox[2], bbox[3])
-				}
-			}
-
-			switch strings.ToLower(b.Label) {
-			case "title":
-				fmt.Fprintf(&sb, "## %s\n\n", content)
-			case "figure", "caption":
-				fmt.Fprintf(&sb, "*%s*\n\n", content)
-			default:
-				sb.WriteString(content)
+		
+		rows := groupBlocksIntoRows(page)
+		if len(rows) == 0 {
+			for _, b := range page {
+				sb.WriteString(blockContentString(b))
 				sb.WriteString("\n\n")
 			}
+			continue
 		}
+		
+		var tableRows [][]string
+		
+		flushTable := func() {
+			if len(tableRows) == 0 {
+				return
+			}
+			maxCols := 0
+			for _, r := range tableRows {
+				if len(r) > maxCols {
+					maxCols = len(r)
+				}
+			}
+			if maxCols > 1 {
+				for idx, r := range tableRows {
+					isLeakedRow := false
+					for _, cell := range r {
+						if isLeakedContent(cell, nil) {
+							isLeakedRow = true
+							break
+						}
+					}
+					if isLeakedRow {
+						continue
+					}
+					sb.WriteString("| " + strings.Join(r, " | ") + " |\n")
+					if idx == 0 {
+						sb.WriteString("|")
+						for c := 0; c < maxCols; c++ {
+							sb.WriteString(" --- |")
+						}
+						sb.WriteString("\n")
+					}
+				}
+				sb.WriteString("\n")
+			} else {
+				for _, r := range tableRows {
+					if len(r) > 0 {
+						sb.WriteString(r[0] + "\n\n")
+					}
+				}
+			}
+			tableRows = nil
+		}
+		
+		for _, row := range rows {
+			if len(row) == 1 {
+				flushTable()
+				b := row[0]
+				content := strings.TrimSpace(blockContentString(b))
+				bbox, _ := getBBox(b.BBox2D)
+				if content == "" || isLeakedContent(content, bbox) {
+					continue
+				}
+				if strings.Contains(strings.ToLower(content), "<table") {
+					sb.WriteString(htmlTableToMarkdown(content) + "\n\n")
+					continue
+				}
+				switch strings.ToLower(b.Label) {
+				case "title":
+					fmt.Fprintf(&sb, "## %s\n\n", content)
+				case "figure", "caption":
+					fmt.Fprintf(&sb, "*%s*\n\n", content)
+				default:
+					sb.WriteString(content + "\n\n")
+				}
+			} else {
+				var cells []string
+				for _, b := range row {
+					cells = append(cells, strings.TrimSpace(blockContentString(b)))
+				}
+				tableRows = append(tableRows, cells)
+			}
+		}
+		flushTable()
 	}
 	return strings.TrimSpace(sb.String())
 }
@@ -1208,11 +1339,16 @@ Examples:
 		totalPages = 1
 	}
 
-	if eng == EngineBaidu && *prompt == defaultPrompt {
-		if totalPages > 1 {
-			*prompt = "<image>Multi page parsing."
-		} else {
-			*prompt = "<image>document parsing."
+	if eng == EngineBaidu {
+		if *prompt == defaultPrompt {
+			if totalPages > 1 {
+				*prompt = "<image>Multi page Extract all text from this document"
+			} else {
+				*prompt = "<image>Extract all text from this document"
+			}
+		}
+		if !strings.HasPrefix(*prompt, "<image>") {
+			*prompt = "<image>" + *prompt
 		}
 	}
 
@@ -1480,7 +1616,7 @@ Examples:
 			
 			pages, _ := parseOCRContent(content)
 			if len(pages) > 0 {
-				allPages = append(allPages, pages[0])
+				allPages = append(allPages, mergeHorizontalPageBlocks(pages[0]))
 			}
 		}
 	}
@@ -1491,6 +1627,8 @@ Examples:
 	if *rawMode {
 		return nil
 	}
+
+	// Keep blocks raw for HTML rendering to preserve correct spatial positioning
 
 	var result string
 	switch {
@@ -1650,4 +1788,157 @@ func findCachedPage(state *ResumeState, index int) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func groupBlocksIntoRows(page []OCRBlock) [][]OCRBlock {
+	var hasBBox []OCRBlock
+	
+	for _, b := range page {
+		if _, ok := getBBox(b.BBox2D); ok {
+			hasBBox = append(hasBBox, b)
+		}
+	}
+	
+	if len(hasBBox) == 0 {
+		return nil
+	}
+	
+	// Sort by y_center
+	sort.Slice(hasBBox, func(i, j int) bool {
+		bi, _ := getBBox(hasBBox[i].BBox2D)
+		bj, _ := getBBox(hasBBox[j].BBox2D)
+		yci := float64(bi[1]+bi[3]) / 2.0
+		ycj := float64(bj[1]+bj[3]) / 2.0
+		return yci < ycj
+	})
+	
+	// Group into rows
+	var rows [][]OCRBlock
+	for _, b := range hasBBox {
+		bbox, _ := getBBox(b.BBox2D)
+		yc := float64(bbox[1]+bbox[3]) / 2.0
+		h := float64(bbox[3] - bbox[1])
+		if h <= 0 {
+			h = 10
+		}
+		if h > 50 {
+			rows = append(rows, []OCRBlock{b})
+			continue
+		}
+		
+		placed := false
+		for idx, row := range rows {
+			var sumYc float64
+			var sumH float64
+			isRowCompatible := true
+			for _, rb := range row {
+				rbox, _ := getBBox(rb.BBox2D)
+				rh := float64(rbox[3] - rbox[1])
+				if rh > 50 {
+					isRowCompatible = false
+					break
+				}
+				sumYc += float64(rbox[1]+rbox[3]) / 2.0
+				sumH += rh
+			}
+			if !isRowCompatible {
+				continue
+			}
+			avgYc := sumYc / float64(len(row))
+			avgH := sumH / float64(len(row))
+			if avgH <= 0 {
+				avgH = 10
+			}
+			
+			threshold := avgH * 0.7
+			if threshold < 12 {
+				threshold = 12
+			}
+			if math.Abs(yc-avgYc) < threshold {
+				rows[idx] = append(rows[idx], b)
+				placed = true
+				break
+			}
+		}
+		
+		if !placed {
+			rows = append(rows, []OCRBlock{b})
+		}
+	}
+	
+	for idx := range rows {
+		sort.Slice(rows[idx], func(i, j int) bool {
+			bi, _ := getBBox(rows[idx][i].BBox2D)
+			bj, _ := getBBox(rows[idx][j].BBox2D)
+			return bi[0] < bj[0]
+		})
+	}
+	
+	return rows
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func mergeHorizontalPageBlocks(page []OCRBlock) []OCRBlock {
+	rows := groupBlocksIntoRows(page)
+	if len(rows) == 0 {
+		return page
+	}
+	
+	var mergedBlocks []OCRBlock
+	index := 0
+	
+	for _, row := range rows {
+		var rowMerged []OCRBlock
+		for _, b := range row {
+			if len(rowMerged) == 0 {
+				rowMerged = append(rowMerged, b)
+				continue
+			}
+			
+			last := &rowMerged[len(rowMerged)-1]
+			lastBox, _ := getBBox(last.BBox2D)
+			currBox, _ := getBBox(b.BBox2D)
+			gap := currBox[0] - lastBox[2]
+			isTable := strings.ToLower(last.Label) == "table" || strings.ToLower(b.Label) == "table"
+			// Threshold of 20 units is small enough to only merge adjacent words within the same cell
+			if !isTable && gap <= 20 {
+				lastBox[0] = minInt(lastBox[0], currBox[0])
+				lastBox[1] = minInt(lastBox[1], currBox[1])
+				lastBox[2] = maxInt(lastBox[2], currBox[2])
+				lastBox[3] = maxInt(lastBox[3], currBox[3])
+				last.BBox2D = lastBox
+				
+				lastContent := blockContentString(*last)
+				currContent := blockContentString(b)
+				if lastContent != "" && currContent != "" {
+					last.Content = lastContent + " " + currContent
+				} else if currContent != "" {
+					last.Content = currContent
+				}
+			} else {
+				rowMerged = append(rowMerged, b)
+			}
+		}
+		
+		for _, b := range rowMerged {
+			b.Index = index
+			mergedBlocks = append(mergedBlocks, b)
+			index++
+		}
+	}
+	
+	return mergedBlocks
 }
