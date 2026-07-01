@@ -92,8 +92,9 @@ ocr -endpoint http://10.0.0.5:8000 document.pdf
 
 - 🚀 **Zero Dependencies**: Built with pure Go + WebAssembly. No need for `poppler`, `mupdf`, or any system-level PDF tools.
 - 📦 **Self-Contained**: PDF rendering is embedded inside the binary. Single file, works everywhere.
-- 📑 **Robust Multi-Page PDF Support**: Renders pages locally and processes them sequentially to avoid GPU memory limits.
-- 🎯 **Multiple Outputs**: Get results in **Markdown**, **Plain Text**, or **JSON**.
+- 🔌 **Multi-Engine Support**: Switch between **GLM-OCR** (default, `-engine glm`) and **Baidu Unlimited-OCR** (`-engine baidu`) without changing your workflow — same CLI flags, same output formats.
+- 📑 **Robust Multi-Page PDF Support**: Renders pages locally, then dispatches to the engine — sequentially for GLM-OCR, batched per request for Baidu to leverage native multi-page reasoning.
+- 🎯 **Multiple Outputs**: Get results in **Markdown**, **Plain Text**, **JSON**, or **LaTeX**.
 - 🌍 **Cross-Platform**: Compiled for Linux, macOS, and Windows (AMD64 & ARM64).
 
 ---
@@ -183,9 +184,9 @@ ocr -engine baidu -endpoint http://192.168.0.12:4000 -model baidu/Unlimited-OCR 
 Both the **GLM-OCR** and **Baidu Unlimited-OCR** models require images as input. Since neither model can process raw PDF blobs directly, this CLI performs the following steps (engine-dependent behaviors are noted inline):
 
 1. **PDF Rendering**: Uses `go-pdfium` running on the `wazero` WebAssembly engine to render PDF pages into images. The default is **200 DPI**, which is optimal for balance between speed and OCR quality.
-2. **Sequential Processing**: To ensure reliability and avoid overwhelming the GPU or hitting context limits, pages are processed one by one. The CLI prints a beautiful, color-coded real-time dashboard of current progress and timing.
-3. **Automatic Resuming**: If `-resume` is enabled, the CLI computes a unique SHA-256 hash representing the input file (path, size, modification time) and API parameters. Every successfully processed page is saved locally to your system cache directory (`~/.cache/ocr-cli/` or equivalent). If interrupted, re-running the same command will restore all cached pages and skip API calls, resuming right where it left off. Cache files are cleaned up upon successful completion.
-4. **Structured Parsing**: The results are combined and parsed into the chosen format. If the model returns mixed content, the CLI extracts the JSON part automatically.
+2. **Sequential vs. Batched Processing**: With the default **`glm`** engine, pages are sent one at a time to avoid overwhelming the GPU or hitting context limits. With the **`baidu`** engine, all pages are sent in a single request to leverage the model's native multi-page reasoning — control batching via `-batch-size`. The CLI prints a beautiful, color-coded real-time dashboard of current progress and timing.
+3. **Automatic Resuming**: If `-resume` is enabled, the CLI computes a unique SHA-256 hash representing the input file (path, size, modification time) and API parameters (including the chosen engine). Every successfully processed page is saved locally to your system cache directory (`~/.cache/ocr-cli/` or equivalent). If interrupted, re-running the same command will restore all cached pages and skip API calls, resuming right where it left off. Cache files are cleaned up upon successful completion.
+4. **Structured Parsing**: The results are combined and parsed into the chosen format. Engine-specific output formats (GLM-OCR's JSON array of blocks, Baidu's markdown laced with `<|det|>` grounding tokens and `<PAGE>` page markers) are normalized into the requested output format. If the model returns mixed content, the CLI extracts the JSON part automatically.
 
 ---
 
