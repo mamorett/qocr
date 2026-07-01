@@ -1,20 +1,20 @@
-# 📄 GLM-OCR CLI
+# 📄 QOCR CLI
 
 ```text
-  ____ _     __  __          ___   ____ ____  
- / ___| |   |  \/  |        / _ \ / ___|  _ \ 
-| |  _| |   | |\/| | _____ | | | | |   | |_) |
-| |_| | |___| |  | ||_____|| |_| | |___|  _ < 
- \____|_____|_|  |_|        \___/ \____|_| \_\
+   __ _  ___   ___ _ __
+ / _` |/ _ \ / __| '__|
+| (_| | (_) | (__| |
+ \__, |\___/ \___|_|
+    |_|
 ```
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/mamorett/glm-ocr)](https://goreportcard.com/report/github.com/mamorett/glm-ocr)
+[![Go Report Card](https://goreportcard.com/badge/github.com/mamorett/qocr)](https://goreportcard.com/report/github.com/mamorett/qocr)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A lightweight, **self-contained** CLI that extracts structured text from images and multi-page PDFs using the **GLM-OCR** model.
+A lightweight, **self-contained** CLI that extracts structured text from images and multi-page PDFs using either the **GLM-OCR** model or the **Baidu Unlimited-OCR** model — selectable via the `-engine` flag (`glm` is the default).
 
 > [!IMPORTANT]
-> This tool does **not** bundle the model. You must run an OpenAI-compatible inference engine (such as **vLLM**) serving the `zai-org/GLM-OCR` model, or point the CLI at an existing remote endpoint.
+> This tool does **not** bundle the model. You must run an OpenAI-compatible inference engine (such as **vLLM**) serving either the `zai-org/GLM-OCR` model (default engine, `-engine glm`) or the `baidu/Unlimited-OCR` model (switch with `-engine baidu`). See the [Prerequisites](#-prerequisites) and [Baidu Unlimited-OCR Engine](#-baidu-unlimited-ocr-engine) sections below for setup details for each.
 
 ---
 
@@ -24,14 +24,28 @@ A lightweight, **self-contained** CLI that extracts structured text from images 
 
 The CLI sends rendered page images to a chat-completions endpoint. By default it expects the server at `http://localhost:8080`.
 
-**Quick start with vLLM (recommended):**
+**Quick start GLM-OCR  with vLLM (recommended):**
 
 ```bash
 vllm serve zai-org/GLM-OCR \
   --allowed-local-media-path / \
-  --port 8080 \
+  --port 8000 \
   --gpu-memory-utilization 0.75 \
   --speculative-config '{"method": "mtp", "num_speculative_tokens": 1}'
+```
+
+**Quick start Baidu Unlimited-OCR with vLLM (recommended):**
+
+```bash
+docker run --gpus all \
+  --privileged --ipc=host -p 8000:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  vllm/vllm-openai:unlimited-ocr baidu/Unlimited-OCR \
+  --trust-remote-code \
+  --logits_processors vllm.model_executor.models.unlimited_ocr:NGramPerReqLogitsProcessor \
+  --no-enable-prefix-caching \
+  --mm-processor-cache-gb 0 \
+  --tensor-parallel-size 1
 ```
 
 **Quick start with Ollama:**
@@ -69,7 +83,7 @@ If you are using **Ollama** (which runs on port `11434` by default), you can run
 If the engine runs on another host, simply specify the endpoint. Images are automatically embedded and sent as base64 data-URIs:
 
 ```bash
-ocr -endpoint http://10.0.0.5:8080 document.pdf
+ocr -endpoint http://10.0.0.5:8000 document.pdf
 ```
 
 ---
@@ -156,11 +170,17 @@ Extract raw JSON data for programmatic use:
 ocr -json -output result.json document.pdf
 ```
 
+### Using the Baidu Unlimited-OCR Engine
+Switch to Baidu's model with `-engine baidu` for a different prompt recipe and per-document batching:
+```bash
+ocr -engine baidu -endpoint http://192.168.0.12:4000 -model baidu/Unlimited-OCR document.pdf -latex -output result.tex
+```
+
 ---
 
 ## ⚙️ How it Works
 
-The **GLM-OCR** model requires images as input. Since it cannot process raw PDF blobs directly, this CLI performs the following steps:
+Both the **GLM-OCR** and **Baidu Unlimited-OCR** models require images as input. Since neither model can process raw PDF blobs directly, this CLI performs the following steps (engine-dependent behaviors are noted inline):
 
 1. **PDF Rendering**: Uses `go-pdfium` running on the `wazero` WebAssembly engine to render PDF pages into images. The default is **200 DPI**, which is optimal for balance between speed and OCR quality.
 2. **Sequential Processing**: To ensure reliability and avoid overwhelming the GPU or hitting context limits, pages are processed one by one. The CLI prints a beautiful, color-coded real-time dashboard of current progress and timing.

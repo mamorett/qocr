@@ -139,11 +139,11 @@ func isLeakedContent(content string, bbox []int) bool {
 }
 
 const asciiArt = `
-  ____ _     __  __          ___   ____ ____  
- / ___| |   |  \/  |        / _ \ / ___|  _ \ 
-| |  _| |   | |\/| | _____ | | | | |   | |_) |
-| |_| | |___| |  | ||_____|| |_| | |___|  _ < 
- \____|_____|_|  |_|        \___/ \____|_| \_\`
+   __ _  ___   ___ _ __ 
+ / _` + "`" + ` |/ _ \ / __| '__|
+| (_| | (_) | (__| |   
+ \__, |\___/ \___|_|   
+    |_|                `
 
 var version = "dev"
 
@@ -214,7 +214,7 @@ type ChatResponse struct {
 }
 
 // ---------------------------------------------------------------------------
-// GLM-OCR structured response
+// OCR structured response
 // ---------------------------------------------------------------------------
 
 type OCRBlock struct {
@@ -1628,7 +1628,7 @@ Examples:
 
 	// Print ASCII art and dashboard
 	fmt.Fprintln(os.Stderr, color(colorBold+colorCyan, asciiArt))
-	fmt.Fprintf(os.Stderr, "  %s\n", color(colorBold+colorCyan, "GLM-OCR CLIENT — DOCUMENT DIGITIZATION"))
+	fmt.Fprintf(os.Stderr, "  %s\n", color(colorBold+colorCyan, "QOCR CLIENT — DOCUMENT DIGITIZATION"))
 	fmt.Fprintf(os.Stderr, "%s\n", color(colorDim, "─────────────────────────────────────────────────────────────────"))
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Input file:", color(colorWhite, inputFile))
 	fmt.Fprintf(os.Stderr, "  %s %-15s %d page(s)\n", color(colorBold+colorCyan, "•"), "Pages:", totalPages)
