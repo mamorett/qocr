@@ -20,8 +20,22 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
+
+var latexTableCounter int64
+
+func getUniqueBoxName() string {
+	val := atomic.AddInt64(&latexTableCounter, 1)
+	s := fmt.Sprintf("%d", val)
+	var sb strings.Builder
+	sb.WriteString("tblbox")
+	for _, r := range s {
+		sb.WriteRune(rune('a' + (r - '0')))
+	}
+	return sb.String()
+}
 
 const defaultPrompt = "Extract all text from this document"
 
@@ -994,6 +1008,10 @@ func htmlTableToLatex(htmlStr string) string {
 	for c := 0; c < maxCols; c++ {
 		alignStr += "l "
 	}
+	boxName := getUniqueBoxName()
+	fmt.Fprintf(&sb, "\\newsavebox{\\%s}\n", boxName)
+	fmt.Fprintf(&sb, "\\sbox{\\%s}{%%\n", boxName)
+	sb.WriteString("\\small\n")
 	fmt.Fprintf(&sb, "\\begin{tabular}{%s}\n\\hline\n", strings.TrimSpace(alignStr))
 	for idx, row := range latexRows {
 		for len(row) < maxCols {
@@ -1004,7 +1022,13 @@ func htmlTableToLatex(htmlStr string) string {
 			sb.WriteString("\\hline\n")
 		}
 	}
-	sb.WriteString("\\hline\n\\end{tabular}\n\\end{table}\n")
+	sb.WriteString("\\hline\n\\end{tabular}%\n}\n")
+	fmt.Fprintf(&sb, "\\ifdim\\wd\\%s>\\linewidth\n", boxName)
+	fmt.Fprintf(&sb, "  \\resizebox{\\linewidth}{!}{\\usebox{\\%s}}%%\n", boxName)
+	fmt.Fprintf(&sb, "\\else\n")
+	fmt.Fprintf(&sb, "  \\usebox{\\%s}%%\n", boxName)
+	fmt.Fprintf(&sb, "\\fi\n")
+	sb.WriteString("\\end{table}\n")
 	return sb.String()
 }
 
@@ -1014,12 +1038,9 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 	sb.WriteString("\\usepackage[utf8]{inputenc}\n")
 	sb.WriteString("\\usepackage{amsmath}\n")
 	sb.WriteString("\\usepackage{amssymb}\n")
-	
-	fmt.Fprintf(&sb, "\\title{OCR Digitization of %s}\n", escapeLatexWithMath(source))
-	fmt.Fprintf(&sb, "\\author{Model: %s}\n", escapeLatexWithMath(model))
-	sb.WriteString("\\date{\\today}\n\n")
-	
-	sb.WriteString("\\begin{document}\n\\maketitle\n\n")
+	sb.WriteString("\\usepackage{graphicx}\n")
+	sb.WriteString("\\usepackage[margin=0.75in]{geometry}\n\n")
+	sb.WriteString("\\begin{document}\n\n")
 	
 	for pi, page := range pages {
 		if pi > 0 {
@@ -1063,6 +1084,10 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 				for c := 0; c < maxCols; c++ {
 					alignStr += "l "
 				}
+				boxName := getUniqueBoxName()
+				fmt.Fprintf(&sb, "\\newsavebox{\\%s}\n", boxName)
+				fmt.Fprintf(&sb, "\\sbox{\\%s}{%%\n", boxName)
+				sb.WriteString("\\small\n")
 				fmt.Fprintf(&sb, "\\begin{tabular}{%s}\n\\hline\n", strings.TrimSpace(alignStr))
 				
 				for idx, r := range tableRows {
@@ -1096,7 +1121,13 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 						sb.WriteString("\\hline\n")
 					}
 				}
-				sb.WriteString("\\hline\n\\end{tabular}\n\\end{table}\n\n")
+				sb.WriteString("\\hline\n\\end{tabular}%\n}\n")
+				fmt.Fprintf(&sb, "\\ifdim\\wd\\%s>\\linewidth\n", boxName)
+				fmt.Fprintf(&sb, "  \\resizebox{\\linewidth}{!}{\\usebox{\\%s}}%%\n", boxName)
+				fmt.Fprintf(&sb, "\\else\n")
+				fmt.Fprintf(&sb, "  \\usebox{\\%s}%%\n", boxName)
+				fmt.Fprintf(&sb, "\\fi\n")
+				sb.WriteString("\\end{table}\n\n")
 			} else {
 				for _, r := range tableRows {
 					if len(r) > 0 {
