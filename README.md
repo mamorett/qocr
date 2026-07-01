@@ -113,14 +113,19 @@ ocr [options] <file>
 | Flag | Description | Default |
 | :--- | :--- | :--- |
 | `-endpoint` | API base URL | `http://localhost:8080` |
-| `-model` | Model name | `zai-org/GLM-OCR` |
-| `-prompt` | Instruction sent with the file | `Extract all text from this document` |
+| `-model` | Model name | `zai-org/GLM-OCR` (or `baidu/Unlimited-OCR` in baidu mode) |
+| `-engine` | OCR engine to use: `glm` or `baidu` | `glm` |
+| `-prompt` | Instruction sent with the file | `Extract all text from this document` (or automatic prompt recipes in baidu mode) |
 | `-output` | Write output to file instead of stdout | `stdout` |
 | `-dpi` | PDF rendering resolution | `200` |
 | `-resume` | Resume previous execution if interrupted | `true` |
 | `-markdown` | Output as Markdown | `true` |
 | `-text` | Output as plain text (flattens tables) | `false` |
-| `-json` | Output as structured JSON | `false` |
+| `-json` | Output as structured JSON (includes dimensions & rotation metadata) | `false` |
+| `-latex` | Output as LaTeX document fragment (tables are auto-scaled) | `false` |
+| `-bbox` | Embed normalized bounding boxes as HTML comments in markdown | `false` |
+| `-batch-size` | Number of pages per request (Baidu mode only, 0 sends all at once) | `0` |
+| `-max-tokens` | Max tokens to generate (0 means use default: unset for glm, 8192 for baidu) | `0` |
 | `-raw` | Dump raw model response (debug) | `false` |
 
 ---
@@ -173,9 +178,29 @@ Maps block labels (title, text, table, figure) to appropriate Markdown elements.
 Strips all Markdown decoration and flattens tables for easy copy-pasting or grep-ing.
 
 ### 🔢 JSON (`-json`)
-Returns a full structured object containing the source path, model used, and a list of all detected blocks with their coordinates (`bbox_2d`).
+Returns a full structured object containing the source path, model used, a list of page metadata (width, height, DPI, rotation), and a list of all detected blocks with their coordinates (`bbox_2d`).
+
+### 🧮 LaTeX (`-latex`)
+Returns a LaTeX document fragment containing the OCRed text paragraphs and tables. Tables are dynamically measured: if a table's natural width exceeds the page's text line width, it is auto-scaled down using a native LaTeX savebox conditional wrapper to fit within the margins; narrow tables are left at their natural size to prevent ugly layout stretching.
+
+---
+
+## 🤖 Baidu Unlimited-OCR Engine
+
+The CLI supports the **Baidu `Unlimited-OCR`** model via `-engine baidu`. Key features of this integration:
+- **Recipes**: Automatic instruction tuning based on page count (`<image>document parsing.` for single page, `<image>Multi page parsing.` for multi-page).
+- **Logit Processor Configuration**: Passes the official `"custom_logit_processor": "DeepseekOCRNoRepeatNGramLogitProcessor"` and `"custom_params"` (`ngram_size` and `window_size`) configuration parameters, preventing infinite loops and text repetition on the server.
+- **Batching**: Processes all pages in a single API request by default, preserving the model's native multi-page reasoning. You can limit batch size using `-batch-size`.
+- **Special Tokens**: Preserves grounding coordinates and page tokens returned by the server to construct layout-accurate 2D mappings.
+- **Cache**: Unique caching strategy that serializes the full raw document output to skip inference.
+
+Example usage:
+```bash
+# Using Baidu engine with custom model and endpoint
+ocr -engine baidu -model <your-vllm-model-id> -endpoint http://192.168.0.12:4000 document.pdf -latex -output result.tex
+```
 
 ---
 
 ## ⚖️ License
-This project is licensed under the **MIT License**.
+This project is licensed under the **MIT License** (see [LICENSE](file:///gorgon/ia/glm-ocr/LICENSE)).
