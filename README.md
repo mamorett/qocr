@@ -139,7 +139,7 @@ ocr [options] <file>
 | `-json` | Output as structured JSON (includes dimensions & rotation metadata) | `false` |
 | `-latex` | Output as LaTeX document fragment (tables are auto-scaled) | `false` |
 | `-bbox` | Embed normalized bounding boxes as HTML comments in markdown | `false` |
-| `-batch-size` | Number of pages per request (Baidu mode only, 0 sends all at once) | `0` |
+| `-batch-size` | Number of pages per request (Baidu mode only, defaults to 1 for memory stability) | `1` |
 | `-max-tokens` | Max tokens to generate (0 means use default: unset for glm, 8192 for baidu) | `0` |
 | `-raw` | Dump raw model response (debug) | `false` |
 
@@ -211,7 +211,7 @@ Returns a LaTeX document fragment containing the OCRed text paragraphs and table
 The CLI supports the **Baidu `Unlimited-OCR`** model via `-engine baidu`. Key features of this integration:
 - **Recipes**: Automatic instruction tuning based on page count (`<image>document parsing.` for single page, `<image>Multi page parsing.` for multi-page).
 - **Logit Processor Configuration**: Passes the official `"custom_logit_processor": "DeepseekOCRNoRepeatNGramLogitProcessor"` and `"custom_params"` (`ngram_size` and `window_size`) configuration parameters, preventing infinite loops and text repetition on the server.
-- **Batching**: Processes all pages in a single API request by default, preserving the model's native multi-page reasoning. You can limit batch size using `-batch-size`.
+- **Batching**: Processes page-by-page sequentially by default (batch size of 1) for maximum memory stability, avoiding out-of-memory errors on large documents. You can customize the batch size using the `-batch-size` flag.
 - **Special Tokens**: Preserves grounding coordinates and page tokens returned by the server to construct layout-accurate 2D mappings.
 - **Cache**: Unique caching strategy that serializes the full raw document output to skip inference.
 

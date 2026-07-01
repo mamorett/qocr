@@ -1705,7 +1705,7 @@ Examples:
 
 			bs := *batchSize
 			if bs <= 0 {
-				bs = totalPages
+				bs = 1
 			}
 
 			var rawDocBuilder strings.Builder
@@ -1717,10 +1717,19 @@ Examples:
 				batchURIs := uris[start:end]
 				isMulti := len(batchURIs) > 1
 
+				batchPrompt := *prompt
+				if *prompt == defaultPrompt || *prompt == "<image>Multi page Extract all text from this document" || *prompt == "<image>Extract all text from this document" {
+					if isMulti {
+						batchPrompt = "<image>Multi page Extract all text from this document"
+					} else {
+						batchPrompt = "<image>Extract all text from this document"
+					}
+				}
+
 				fmt.Fprintf(os.Stderr, "  %s Sending batch (pages %d-%d): %s\r", color(colorCyan, "⏳"), start+1, end, color(colorDim, "recognizing..."))
 				batchStart := time.Now()
 				
-				cr, err := callAPIBaidu(apiURL, *model, *prompt, batchURIs, isMulti, *maxTokens)
+				cr, err := callAPIBaidu(apiURL, *model, batchPrompt, batchURIs, isMulti, *maxTokens)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "\n")
 					return fmt.Errorf("API call for batch %d-%d: %w", start+1, end, err)
