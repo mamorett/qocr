@@ -156,6 +156,9 @@ func TestRenderLatex(t *testing.T) {
 	if !strings.Contains(latexOut, "\\usepackage[margin=0.75in]{geometry}") {
 		t.Error("expected output to contain geometry package with 0.75in margin")
 	}
+	if !strings.Contains(latexOut, "\\newsavebox{\\tblbox}") {
+		t.Error("expected output to contain global tblbox savebox declaration")
+	}
 	if !strings.Contains(latexOut, "Page Two") {
 		t.Error("expected output to contain 'Page Two'")
 	}
@@ -165,9 +168,8 @@ func TestRenderLatex(t *testing.T) {
 }
 
 func TestHTMLTableToLatex(t *testing.T) {
-	latexTableCounter = 0
 	htmlTable := "<table><tr><th>Header 1</th><th>Header 2</th></tr><tr><td>Cell 1</td><td>Cell 2</td></tr></table>"
-	expected := "\\begin{table}[h]\n\\centering\n\\newsavebox{\\tblboxb}\n\\sbox{\\tblboxb}{%\n\\small\n\\begin{tabular}{l l}\n\\hline\nHeader 1 & Header 2 \\\\\n\\hline\nCell 1 & Cell 2 \\\\\n\\hline\n\\end{tabular}%\n}\n\\ifdim\\wd\\tblboxb>\\linewidth\n  \\resizebox{\\linewidth}{!}{\\usebox{\\tblboxb}}%\n\\else\n  \\usebox{\\tblboxb}%\n\\fi\n\\end{table}\n"
+	expected := "\\begin{table}[h]\n\\centering\n\\sbox{\\tblbox}{%\n\\small\n\\begin{tabular}{l l}\n\\hline\nHeader 1 & Header 2 \\\\ \\relax\n\\hline\nCell 1 & Cell 2 \\\\ \\relax\n\\hline\n\\end{tabular}%\n}\n\\ifdim\\wd\\tblbox>\\linewidth\n  \\resizebox{\\linewidth}{!}{\\usebox{\\tblbox}}%\n\\else\n  \\usebox{\\tblbox}%\n\\fi\n\\end{table}\n"
 	
 	result := htmlTableToLatex(htmlTable)
 	if result != expected {

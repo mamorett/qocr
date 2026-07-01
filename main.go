@@ -20,22 +20,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 )
-
-var latexTableCounter int64
-
-func getUniqueBoxName() string {
-	val := atomic.AddInt64(&latexTableCounter, 1)
-	s := fmt.Sprintf("%d", val)
-	var sb strings.Builder
-	sb.WriteString("tblbox")
-	for _, r := range s {
-		sb.WriteRune(rune('a' + (r - '0')))
-	}
-	return sb.String()
-}
 
 const defaultPrompt = "Extract all text from this document"
 
@@ -944,6 +930,32 @@ func cleanUnicodeForLatex(s string) string {
 	s = strings.ReplaceAll(s, "θ", "\\(\\theta\\)")
 	s = strings.ReplaceAll(s, "√", "\\(\\surd\\)")
 	
+	// Map superscript digits to LaTeX math superscripts
+	s = strings.ReplaceAll(s, "⁰", "\\(^{0}\\)")
+	s = strings.ReplaceAll(s, "¹", "\\(^{1}\\)")
+	s = strings.ReplaceAll(s, "²", "\\(^{2}\\)")
+	s = strings.ReplaceAll(s, "³", "\\(^{3}\\)")
+	s = strings.ReplaceAll(s, "⁴", "\\(^{4}\\)")
+	s = strings.ReplaceAll(s, "⁵", "\\(^{5}\\)")
+	s = strings.ReplaceAll(s, "⁶", "\\(^{6}\\)")
+	s = strings.ReplaceAll(s, "⁷", "\\(^{7}\\)")
+	s = strings.ReplaceAll(s, "⁸", "\\(^{8}\\)")
+	s = strings.ReplaceAll(s, "⁹", "\\(^{9}\\)")
+	
+	// Map common math/arrow symbols
+	s = strings.ReplaceAll(s, "↔", "\\(\\leftrightarrow\\)")
+	s = strings.ReplaceAll(s, "→", "\\(\\rightarrow\\)")
+	s = strings.ReplaceAll(s, "←", "\\(\\leftarrow\\)")
+	
+	// Map Scandinavian characters and empty-set symbols
+	s = strings.ReplaceAll(s, "Ø", "\\O ")
+	s = strings.ReplaceAll(s, "ø", "\\o ")
+	s = strings.ReplaceAll(s, "∅", "\\O ")
+	s = strings.ReplaceAll(s, "Æ", "\\AE ")
+	s = strings.ReplaceAll(s, "æ", "\\ae ")
+	s = strings.ReplaceAll(s, "Å", "\\AA ")
+	s = strings.ReplaceAll(s, "å", "\\aa ")
+	
 	// Strip Chinese (Han) characters
 	s = cjkRegexp.ReplaceAllString(s, "")
 	return s
@@ -958,6 +970,10 @@ func escapeLatex(s string) string {
 	s = strings.ReplaceAll(s, "{", "\\{")
 	s = strings.ReplaceAll(s, "}", "\\}")
 	s = strings.ReplaceAll(s, "#", "\\#")
+	s = strings.ReplaceAll(s, "~", "\\textasciitilde ")
+	s = strings.ReplaceAll(s, "^", "\\textasciicircum ")
+	s = strings.ReplaceAll(s, "<", "\\textless ")
+	s = strings.ReplaceAll(s, ">", "\\textgreater ")
 	return s
 }
 
@@ -1063,26 +1079,24 @@ func htmlTableToLatex(htmlStr string) string {
 	for c := 0; c < maxCols; c++ {
 		alignStr += "l "
 	}
-	boxName := getUniqueBoxName()
-	fmt.Fprintf(&sb, "\\newsavebox{\\%s}\n", boxName)
-	fmt.Fprintf(&sb, "\\sbox{\\%s}{%%\n", boxName)
+	sb.WriteString("\\sbox{\\tblbox}{%\n")
 	sb.WriteString("\\small\n")
 	fmt.Fprintf(&sb, "\\begin{tabular}{%s}\n\\hline\n", strings.TrimSpace(alignStr))
 	for idx, row := range latexRows {
 		for len(row) < maxCols {
 			row = append(row, "")
 		}
-		sb.WriteString(strings.Join(row, " & ") + " \\\\\n")
+		sb.WriteString(strings.Join(row, " & ") + " \\\\ \\relax\n")
 		if idx == 0 {
 			sb.WriteString("\\hline\n")
 		}
 	}
 	sb.WriteString("\\hline\n\\end{tabular}%\n}\n")
-	fmt.Fprintf(&sb, "\\ifdim\\wd\\%s>\\linewidth\n", boxName)
-	fmt.Fprintf(&sb, "  \\resizebox{\\linewidth}{!}{\\usebox{\\%s}}%%\n", boxName)
-	fmt.Fprintf(&sb, "\\else\n")
-	fmt.Fprintf(&sb, "  \\usebox{\\%s}%%\n", boxName)
-	fmt.Fprintf(&sb, "\\fi\n")
+	sb.WriteString("\\ifdim\\wd\\tblbox>\\linewidth\n")
+	sb.WriteString("  \\resizebox{\\linewidth}{!}{\\usebox{\\tblbox}}%\n")
+	sb.WriteString("\\else\n")
+	sb.WriteString("  \\usebox{\\tblbox}%\n")
+	sb.WriteString("\\fi\n")
 	sb.WriteString("\\end{table}\n")
 	return sb.String()
 }
@@ -1095,7 +1109,8 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 	sb.WriteString("\\usepackage{amsmath}\n")
 	sb.WriteString("\\usepackage{amssymb}\n")
 	sb.WriteString("\\usepackage{graphicx}\n")
-	sb.WriteString("\\usepackage[margin=0.75in]{geometry}\n\n")
+	sb.WriteString("\\usepackage[margin=0.75in]{geometry}\n")
+	sb.WriteString("\\newsavebox{\\tblbox}\n\n")
 	sb.WriteString("\\begin{document}\n\n")
 	
 	for pi, page := range pages {
@@ -1140,9 +1155,7 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 				for c := 0; c < maxCols; c++ {
 					alignStr += "l "
 				}
-				boxName := getUniqueBoxName()
-				fmt.Fprintf(&sb, "\\newsavebox{\\%s}\n", boxName)
-				fmt.Fprintf(&sb, "\\sbox{\\%s}{%%\n", boxName)
+				sb.WriteString("\\sbox{\\tblbox}{%\n")
 				sb.WriteString("\\small\n")
 				fmt.Fprintf(&sb, "\\begin{tabular}{%s}\n\\hline\n", strings.TrimSpace(alignStr))
 				
@@ -1172,17 +1185,17 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 						continue
 					}
 					
-					sb.WriteString(strings.Join(cleanRow, " & ") + " \\\\\n")
+					sb.WriteString(strings.Join(cleanRow, " & ") + " \\\\ \\relax\n")
 					if idx == 0 {
 						sb.WriteString("\\hline\n")
 					}
 				}
 				sb.WriteString("\\hline\n\\end{tabular}%\n}\n")
-				fmt.Fprintf(&sb, "\\ifdim\\wd\\%s>\\linewidth\n", boxName)
-				fmt.Fprintf(&sb, "  \\resizebox{\\linewidth}{!}{\\usebox{\\%s}}%%\n", boxName)
-				fmt.Fprintf(&sb, "\\else\n")
-				fmt.Fprintf(&sb, "  \\usebox{\\%s}%%\n", boxName)
-				fmt.Fprintf(&sb, "\\fi\n")
+				sb.WriteString("\\ifdim\\wd\\tblbox>\\linewidth\n")
+				sb.WriteString("  \\resizebox{\\linewidth}{!}{\\usebox{\\tblbox}}%\n")
+				sb.WriteString("\\else\n")
+				sb.WriteString("  \\usebox{\\tblbox}%\n")
+				sb.WriteString("\\fi\n")
 				sb.WriteString("\\end{table}\n\n")
 			} else {
 				for _, r := range tableRows {
