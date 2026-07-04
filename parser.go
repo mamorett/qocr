@@ -17,10 +17,7 @@ func parseOCRContent(raw string) (pages [][]OCRBlock, structured bool) {
 			cleanRaw = strings.Join(lines[1:len(lines)-1], "\n")
 		} else {
 			cleanRaw = strings.Trim(raw, "`")
-			// Remove leading language name if any
-			if strings.HasPrefix(cleanRaw, "json\n") {
-				cleanRaw = cleanRaw[5:]
-			}
+			cleanRaw = strings.TrimPrefix(cleanRaw, "json\n")
 		}
 		cleanRaw = strings.TrimSpace(cleanRaw)
 	}
