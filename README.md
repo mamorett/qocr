@@ -1,4 +1,4 @@
-# 📄 QOCR CLI
+# 📄 qocr
 
 ```text
    __ _  ___   ___ _ __
@@ -9,12 +9,13 @@
 ```
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/mamorett/qocr)](https://goreportcard.com/report/github.com/mamorett/qocr)
+[![Go Reference](https://pkg.go.dev/badge/github.com/mamorett/qocr.svg)](https://pkg.go.dev/github.com/mamorett/qocr)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A lightweight, **self-contained** CLI that extracts structured text from images and multi-page PDFs using either the **GLM-OCR** model or the **Baidu Unlimited-OCR** model — selectable via the `-engine` flag (`glm` is the default).
 
 > [!IMPORTANT]
-> This tool does **not** bundle the model. You must run an OpenAI-compatible inference engine (such as **vLLM**) serving either the `zai-org/GLM-OCR` model (default engine, `-engine glm`) or the `baidu/Unlimited-OCR` model (switch with `-engine baidu`). See the [Prerequisites](#-prerequisites) and [Baidu Unlimited-OCR Engine](#-baidu-unlimited-ocr-engine) sections below for setup details for each.
+> This tool does **not** bundle the OCR model. You must run an OpenAI-compatible inference engine (such as **vLLM**) serving either the `zai-org/GLM-OCR` model (default engine, `-engine glm`) or the `baidu/Unlimited-OCR` model (switch with `-engine baidu`). The tool is distributed as Go source code at `github.com/mamorett/qocr`. See the [Prerequisites](#-prerequisites) and [Baidu Unlimited-OCR Engine](#-baidu-unlimited-ocr-engine) sections below for setup details for each.
 
 ---
 
@@ -50,9 +51,9 @@ docker run --gpus all \
 
 **Quick start with Ollama:**
 
-If you are using **Ollama** (which runs on port `11434` by default), you can run GLM-OCR locally. 
+If you are using **Ollama** (which runs on port `11434` by default), you can run GLM-OCR locally.
 
-> [!WARNING]
+> [!TIP]
 > By default, Ollama configures model instances with a small context window (`num_ctx 2048`) and output generation limit (`num_predict 128`).
 > High-resolution images (like the default 200 DPI PDF renders) translate to a high number of visual tokens, filling up the default context window and causing Ollama to truncate its responses early.
 > 
@@ -83,7 +84,7 @@ If you are using **Ollama** (which runs on port `11434` by default), you can run
 If the engine runs on another host, simply specify the endpoint. Images are automatically embedded and sent as base64 data-URIs:
 
 ```bash
-ocr -endpoint http://10.0.0.5:8000 document.pdf
+qocr -endpoint http://10.0.0.5:8000 document.pdf
 ```
 
 ---
@@ -109,6 +110,18 @@ make
 
 # Cross-compile for all supported platforms (linux, darwin, windows for amd64 & arm64)
 make build-all
+
+# Install to your Go bin directory
+make install
+```
+
+The resulting binaries will be placed in the `dist/` folder. You can install the `qocr` binary to your system PATH using:
+
+```bash
+# After building
+sudo cp dist/qocr /usr/local/bin/qocr  # Linux/macOS
+# or
+copy dist\qocr.exe "C:\Program Files\qocr\qocr.exe"  # Windows
 ```
 
 The resulting binaries will be placed in the `dist/` folder.
@@ -128,20 +141,24 @@ ocr [options] <file>
 | Flag | Description | Default |
 | :--- | :--- | :--- |
 | `-endpoint` | API base URL | `http://localhost:8080` |
+| `-port` | Override port in endpoint URL | `0` (uses port from endpoint) |
 | `-model` | Model name | `zai-org/GLM-OCR` (or `baidu/Unlimited-OCR` in baidu mode) |
 | `-engine` | OCR engine to use: `glm` or `baidu` | `glm` |
 | `-prompt` | Instruction sent with the file | `Extract all text from this document` (or automatic prompt recipes in baidu mode) |
 | `-output` | Write output to file instead of stdout | `stdout` |
 | `-dpi` | PDF rendering resolution | `200` |
 | `-resume` | Resume previous execution if interrupted | `true` |
+| `-baidu` | Use Baidu engine (alias for `-engine baidu`) | `false` |
 | `-markdown` | Output as Markdown | `true` |
 | `-text` | Output as plain text (flattens tables) | `false` |
 | `-json` | Output as structured JSON (includes dimensions & rotation metadata) | `false` |
 | `-latex` | Output as LaTeX document fragment (tables are auto-scaled) | `false` |
 | `-bbox` | Embed normalized bounding boxes as HTML comments in markdown | `false` |
-| `-batch-size` | Number of pages per request (Baidu mode only, defaults to 1 for memory stability) | `1` |
+| `-batch-size` | Number of pages per request (Baidu mode only, defaults to all pages for bounded batching) | `0` (all pages when using Baidu) |
 | `-max-tokens` | Max tokens to generate (0 means use default: unset for glm, 8192 for baidu) | `0` |
 | `-raw` | Dump raw model response (debug) | `false` |
+| `-help` | Show usage information | `false` |
+| `-version` | Print version and exit | `false` |
 
 ---
 
@@ -150,31 +167,37 @@ ocr [options] <file>
 ### Basic OCR
 Prints formatted Markdown to your terminal:
 ```bash
-ocr scan.png
+qocr scan.png
 ```
 
 ### Multi-page PDF to File
 Renders all pages and combines them into a single Markdown document. Flags can follow the filename:
 ```bash
-ocr document.pdf -output result.md -dpi 150
+qocr document.pdf -output result.md -dpi 150
 ```
 
 ### Remote Server
 Specify the custom endpoint when the vLLM server is on a different machine:
 ```bash
-ocr -endpoint http://10.0.0.5 invoice.pdf
+qocr -endpoint http://10.0.0.5 invoice.pdf
 ```
 
 ### Structured Data
 Extract raw JSON data for programmatic use:
 ```bash
-ocr -json -output result.json document.pdf
+qocr -json -output result.json document.pdf
+```
+
+### Using the Baidu Alias
+Use the handy `-baidu` flag as an alias:
+```bash
+qocr -baidu document.pdf -output result.txt
 ```
 
 ### Using the Baidu Unlimited-OCR Engine
 Switch to Baidu's model with `-engine baidu` for a different prompt recipe and per-document batching:
 ```bash
-ocr -engine baidu -endpoint http://192.168.0.12:4000 -model baidu/Unlimited-OCR document.pdf -latex -output result.tex
+qocr -engine baidu -endpoint http://192.168.0.12:4000 -model baidu/Unlimited-OCR document.pdf -latex -output result.tex
 ```
 
 ---
@@ -218,10 +241,10 @@ The CLI supports the **Baidu `Unlimited-OCR`** model via `-engine baidu`. Key fe
 Example usage:
 ```bash
 # Using Baidu engine with custom model and endpoint
-ocr -engine baidu -model <your-vllm-model-id> -endpoint http://192.168.0.12:4000 document.pdf -latex -output result.tex
+qocr -engine baidu -model <your-vllm-model-id> -endpoint http://192.168.0.12:4000 document.pdf -latex -output result.tex
 ```
 
 ---
 
 ## ⚖️ License
-This project is licensed under the **MIT License** (see [LICENSE](file:///gorgon/ia/glm-ocr/LICENSE)).
+This project is licensed under the **MIT License** (see [LICENSE](https://github.com/mamorett/qocr/blob/main/LICENSE)).

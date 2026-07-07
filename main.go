@@ -26,6 +26,7 @@ func run(args []string) error {
 	fmtLatex   := fs.Bool("latex", false, "Output as LaTeX document")
 	showBBox   := fs.Bool("bbox", false, "Embed normalized bounding boxes as HTML comments in markdown output")
 	rawMode    := fs.Bool("raw", false, "Dump raw model response and exit (debug)")
+	showHelp   := fs.Bool("help", false, "Show usage information")
 	showVer    := fs.Bool("version", false, "Print version and exit")
 	dpi        := fs.Int("dpi", 200, "Rendering resolution for PDF pages")
 	resume     := fs.Bool("resume", true, "Resume previous execution if interrupted")
@@ -36,15 +37,15 @@ func run(args []string) error {
 
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, color(colorBold+colorCyan, asciiArt))
-		fmt.Fprintf(os.Stderr, "ocr %s\n\nUsage: ocr [options] <file>\n\nOptions:\n", version)
+		fmt.Fprintf(os.Stderr, "qocr %s\n\nUsage: qocr [options] <file>\n\nOptions:\n", version)
 		fs.PrintDefaults()
 		fmt.Fprintln(os.Stderr, `
 Examples:
-  ocr scan.png
-  ocr -baidu scan.png
-  ocr -output result.md document.pdf
-  ocr document.pdf -output result.md
-  ocr --text --output result.txt invoice.pdf`)
+  qocr scan.png
+  qocr -baidu scan.png
+  qocr -output result.md document.pdf
+  qocr document.pdf -output result.md
+  qocr -text -output result.txt invoice.pdf`)
 	}
 
 	// Simple robust flag separation
@@ -71,8 +72,12 @@ Examples:
 		return err
 	}
 
+	if *showHelp {
+		fs.Usage()
+		return nil
+	}
 	if *showVer {
-		fmt.Printf("ocr %s\n", version)
+		fmt.Printf("qocr %s\n", version)
 		return nil
 	}
 	if len(files) < 1 {

@@ -1,4 +1,4 @@
-module github.com/local/ocr-cli
+module github.com/mamorett/qocr
 
 go 1.25.0
 
