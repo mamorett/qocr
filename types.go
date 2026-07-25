@@ -10,8 +10,9 @@ type PageDim struct {
 type Engine string
 
 const (
-	EngineGLM   Engine = "glm"
-	EngineBaidu Engine = "baidu"
+	EngineGLM    Engine = "glm"
+	EngineBaidu  Engine = "baidu"
+	EngineNative Engine = "native"
 )
 
 type ImageURL struct {

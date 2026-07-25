@@ -32,6 +32,7 @@ func run(args []string) error {
 	resume     := fs.Bool("resume", true, "Resume previous execution if interrupted")
 	engine     := fs.String("engine", "glm", "OCR engine: glm (zai-org/GLM-OCR) or baidu (baidu/Unlimited-OCR)")
 	baidu      := fs.Bool("baidu", false, "Use Baidu engine (alias for -engine baidu)")
+	native     := fs.Bool("native", false, "Extract text directly from PDF text layer (no OCR, no AI, no network)")
 	maxTokens  := fs.Int("max-tokens", 0, "Max tokens to generate (0 means use default: unset for glm, 8192 for baidu)")
 	batchSize  := fs.Int("batch-size", 0, "Number of pages per request for baidu (0 means all in one request)")
 
@@ -43,6 +44,7 @@ func run(args []string) error {
 Examples:
   qocr scan.png
   qocr -baidu scan.png
+  qocr -native document.pdf -output result.md
   qocr -output result.md document.pdf
   qocr document.pdf -output result.md
   qocr -text -output result.txt invoice.pdf`)
@@ -96,6 +98,9 @@ Examples:
 	eng := Engine(strings.ToLower(*engine))
 	if *baidu {
 		eng = EngineBaidu
+	}
+	if *native {
+		eng = EngineNative
 	}
 	if eng == EngineBaidu {
 		if *model == "zai-org/GLM-OCR" {
@@ -169,8 +174,13 @@ Examples:
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Input file:", color(colorWhite, inputFile))
 	fmt.Fprintf(os.Stderr, "  %s %-15s %d page(s)\n", color(colorBold+colorCyan, "•"), "Pages:", totalPages)
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Engine:", color(colorWhite, string(eng)))
-	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Model:", color(colorWhite, *model))
-	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Endpoint:", color(colorWhite, base))
+	if eng == EngineNative {
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Model:", color(colorDim, "N/A (text layer)"))
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Endpoint:", color(colorDim, "N/A (offline)"))
+	} else {
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Model:", color(colorWhite, *model))
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Endpoint:", color(colorWhite, base))
+	}
 	if *outputFile != "" {
 		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Output file:", color(colorWhite, *outputFile))
 	} else {
@@ -201,7 +211,52 @@ Examples:
 	var pageDims []PageDim
 	startTime := time.Now()
 
-	if eng == EngineBaidu {
+	if eng == EngineNative {
+		// ── Native text-layer extraction (no OCR, no network) ────────────────
+		if !isPDF {
+			return fmt.Errorf("the -native flag requires a PDF input file (got %q)", inputFile)
+		}
+		pageDims = make([]PageDim, totalPages)
+		ocrStartTime := time.Now()
+		drawProgressBar(0, totalPages, ocrStartTime, "extracting text layer...")
+		for i := 0; i < totalPages; i++ {
+			var blocks []OCRBlock
+			var dim PageDim
+			var found bool
+
+			if *resume && resumeState != nil {
+				var content string
+				content, found = findCachedPage(resumeState, i)
+				if found && i < len(resumeState.PageDims) {
+					pageDims[i] = resumeState.PageDims[i]
+					if found {
+						pages, _ := parseOCRContent(content)
+						if len(pages) > 0 {
+							blocks = pages[0]
+						}
+					}
+				}
+			}
+
+			if found {
+				drawProgressBar(i+1, totalPages, ocrStartTime, "restored from cache")
+			} else {
+				drawProgressBar(i, totalPages, ocrStartTime, fmt.Sprintf("extracting page %d...", i+1))
+				var err error
+				blocks, dim, err = extractNativePage(inputFile, i)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\n")
+					return fmt.Errorf("native extraction page %d: %w", i+1, err)
+				}
+				pageDims[i] = dim
+				drawProgressBar(i+1, totalPages, ocrStartTime, "")
+			}
+
+			allPages = append(allPages, blocks)
+		}
+		fmt.Fprintln(os.Stderr)
+
+	} else if eng == EngineBaidu {
 		var rawDoc string
 		var cacheHit bool
 		if *resume && resumeState != nil && resumeState.RawDocument != "" {
