@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coregx/gxpdf"
 	"github.com/klippa-app/go-pdfium/references"
 	"github.com/klippa-app/go-pdfium/requests"
 	"github.com/klippa-app/go-pdfium/responses"
@@ -24,8 +23,9 @@ import (
 // Strategy:
 //  1. (Tier 1) If the PDF has a logical structure tree (tagged PDF / PDF-UA),
 //     walk it to get exact Table/TR/TD elements and semantic heading levels.
-//  2. (Tier 2) Fallback: GxPDF 4-Pass Hybrid table detection + heading
-//     classification by actual font size from GetPageTextStructured.
+//  2. (Tier 2) Fallback: preserve PDFium's native text-stream order. It does
+//     not reconstruct lines from visual coordinates or guess table boundaries:
+//     both operations can interleave columns and duplicate page content.
 func extractNativePage(path string, index int) ([]OCRBlock, PageDim, error) {
 	if err := initPDFium(); err != nil {
 		return nil, PageDim{}, err
@@ -103,12 +103,18 @@ func extractNativePage(path string, index int) ([]OCRBlock, PageDim, error) {
 		}
 	}
 
-	// ── Tier 2: GxPDF 4-Pass Hybrid + font-size heading classifier ──────────
-	blocks, err3 := extractWithGxPDF(path, index, chars)
-	if err3 != nil {
-		blocks = charSliceToBlocks(chars)
+	// ── Tier 2: preserve PDFium's text-stream order ─────────────────────────
+	textResp, err3 := instance.GetPageText(&requests.GetPageText{
+		Page: requests.Page{
+			ByIndex: &requests.PageByIndex{Document: doc.Document, Index: index},
+		},
+	})
+	if err3 == nil && textResp != nil {
+		if text := normalizeNativeText(textResp.Text); text != "" {
+			return []OCRBlock{{Index: 0, Label: "text", Content: text}}, dim, nil
+		}
 	}
-	return blocks, dim, nil
+	return charSliceToBlocks(chars), dim, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -255,53 +261,15 @@ func structTagToLabel(tag string) string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tier 2: GxPDF 4-Pass Hybrid + font-size heading classifier
+// Native text fallback helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-func extractWithGxPDF(path string, pageIndex int, chars []*responses.GetPageTextStructuredChar) ([]OCRBlock, error) {
-	gDoc, err := gxpdf.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("gxpdf open: %w", err)
-	}
-	defer gDoc.Close() //nolint:errcheck
-
-	tables, _ := gDoc.ExtractTablesWithOptions(&gxpdf.ExtractionOptions{
-		Method: gxpdf.MethodHybrid,
-		Pages:  []int{pageIndex},
-	})
-
-	bodySize := modalFontSize(chars)
-	lines := groupCharsIntoLines(chars)
-
-	var blocks []OCRBlock
-	idx := 0
-
-	for _, t := range tables {
-		rows := t.Rows()
-		if len(rows) == 0 {
-			continue
-		}
-		blocks = append(blocks, OCRBlock{Index: idx, Label: "table", Content: buildHTMLTable(rows)})
-		idx++
-	}
-
-	for _, line := range lines {
-		if len(line) == 0 {
-			continue
-		}
-		text := assembleLineText(line)
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		blocks = append(blocks, OCRBlock{
-			Index:   idx,
-			Label:   classifyLine(line, bodySize),
-			Content: strings.TrimSpace(text),
-		})
-		idx++
-	}
-
-	return blocks, nil
+func normalizeNativeText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "\u00a0", " ")
+	text = strings.ReplaceAll(text, "\x00", "")
+	return strings.TrimSpace(text)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

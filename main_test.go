@@ -170,7 +170,7 @@ func TestRenderLatex(t *testing.T) {
 func TestHTMLTableToLatex(t *testing.T) {
 	htmlTable := "<table><tr><th>Header 1</th><th>Header 2</th></tr><tr><td>Cell 1</td><td>Cell 2</td></tr></table>"
 	expected := "\\begin{table}[h]\n\\centering\n\\sbox{\\tblbox}{%\n\\small\n\\begin{tabular}{l l}\n\\hline\nHeader 1 & Header 2 \\\\ \\relax\n\\hline\nCell 1 & Cell 2 \\\\ \\relax\n\\hline\n\\end{tabular}%\n}\n\\ifdim\\wd\\tblbox>\\linewidth\n  \\resizebox{\\linewidth}{!}{\\usebox{\\tblbox}}%\n\\else\n  \\usebox{\\tblbox}%\n\\fi\n\\end{table}\n"
-	
+
 	result := htmlTableToLatex(htmlTable)
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
@@ -180,9 +180,63 @@ func TestHTMLTableToLatex(t *testing.T) {
 func TestHTMLTableToMarkdown(t *testing.T) {
 	htmlTable := "<table><tr><th>Header 1</th><th>Header 2</th></tr><tr><td>Cell 1</td><td>Cell 2</td></tr></table>"
 	expected := "| Header 1 | Header 2 |\n| --- | --- |\n| Cell 1 | Cell 2 |"
-	
+
 	result := htmlTableToMarkdown(htmlTable)
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
+	}
+}
+
+func TestHTMLTableToMarkdown_NormalizesAndEscapesCells(t *testing.T) {
+	htmlTable := `<TABLE class="data"><TR><TH>Plan | tier</TH><TH>Cost</TH></TR><TR><TD>Pro<br>annual</TD><TD>$10 &amp; tax</TD></TR><TR><TD>Free</TD></TR></TABLE>`
+	expected := "| Plan \\| tier | Cost |\n| --- | --- |\n| Pro annual | $10 & tax |\n| Free |  |"
+	if result := htmlTableToMarkdown(htmlTable); result != expected {
+		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
+	}
+}
+
+func TestRenderMarkdown_NativeTableDoesNotLeakHTML(t *testing.T) {
+	pages := [][]OCRBlock{{
+		{Index: 0, Label: "title", Content: "Synthetic report"},
+		{Index: 1, Label: "table", Content: "<table><tr><th>Name</th><th>Score</th></tr><tr><td>Ada</td><td>10</td></tr></table>"},
+	}}
+	result := renderMarkdown(pages, false)
+	if strings.Contains(strings.ToLower(result), "<table") {
+		t.Fatalf("native Markdown must not contain raw table HTML: %q", result)
+	}
+	expected := "## Synthetic report\n\n| Name | Score |\n| --- | --- |\n| Ada | 10 |"
+	if result != expected {
+		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
+	}
+}
+
+func TestNormalizeNativeText(t *testing.T) {
+	input := "\r\nA\u00a0B\r\nC\r\x00"
+	if got, want := normalizeNativeText(input), "A B\nC"; got != want {
+		t.Errorf("normalizeNativeText() = %q, want %q", got, want)
+	}
+}
+
+func TestHybridRegionsSortAndFilter(t *testing.T) {
+	pages := [][]OCRBlock{{
+		{Label: "text", BBox2D: []int{0, 400, 900, 600}},
+		{Label: "table", BBox2D: []int{50, 100, 950, 350}},
+		{Label: "noise", BBox2D: []int{0, 0, 1, 1}},
+	}}
+	regions := hybridRegions(pages)
+	if len(regions) != 2 || regions[0].kind != "table" || regions[1].kind != "text" {
+		t.Fatalf("unexpected regions: %#v", regions)
+	}
+}
+
+func TestRenderMarkdown_HybridKeepsBaiduTableMarkdown(t *testing.T) {
+	pages := [][]OCRBlock{{
+		{Index: 0, Label: "hybrid-text", Content: "Native text above."},
+		{Index: 1, Label: "hybrid-table", Content: "| Item | Count |\n| --- | ---: |\n| Valve | 4 |"},
+		{Index: 2, Label: "hybrid-text", Content: "Native text below."},
+	}}
+	want := "Native text above.\n\n| Item | Count |\n| --- | ---: |\n| Valve | 4 |\n\nNative text below."
+	if got := renderMarkdown(pages, false); got != want {
+		t.Errorf("renderMarkdown() = %q, want %q", got, want)
 	}
 }

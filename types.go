@@ -13,6 +13,7 @@ const (
 	EngineGLM    Engine = "glm"
 	EngineBaidu  Engine = "baidu"
 	EngineNative Engine = "native"
+	EngineHybrid Engine = "hybrid"
 )
 
 type ImageURL struct {
