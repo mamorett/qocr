@@ -20,6 +20,7 @@ func run(args []string) error {
 	model := fs.String("model", "baidu/Unlimited-OCR", "Model name")
 	prompt := fs.String("prompt", defaultPrompt, "Instruction sent with the file")
 	outputFile := fs.String("output", "", "Write output to file instead of stdout")
+	fs.StringVar(outputFile, "o", "", "Write output to file instead of stdout")
 	_ = fs.Bool("markdown", false, "Output as Markdown (default)")
 	fmtText := fs.Bool("text", false, "Output as plain text")
 	fmtJSON := fs.Bool("json", false, "Output as JSON")
@@ -28,7 +29,9 @@ func run(args []string) error {
 	showBBox := fs.Bool("bbox", false, "Embed normalized bounding boxes as HTML comments in markdown output")
 	rawMode := fs.Bool("raw", false, "Dump raw model response and exit (debug)")
 	showHelp := fs.Bool("help", false, "Show usage information")
+	fs.BoolVar(showHelp, "h", false, "Show usage information")
 	showVer := fs.Bool("version", false, "Print version and exit")
+	fs.BoolVar(showVer, "v", false, "Print version and exit")
 	dpi := fs.Int("dpi", 200, "Rendering resolution for PDF pages")
 	resume := fs.Bool("resume", true, "Resume previous execution if interrupted")
 	engine := fs.String("engine", "baidu", "OCR engine: baidu, glm, native, or hybrid (native text + Baidu table OCR)")
@@ -40,18 +43,96 @@ func run(args []string) error {
 	batchSize := fs.Int("batch-size", 0, "Number of pages per request for baidu (0 means all in one request)")
 
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, color(colorBold+colorCyan, asciiArt))
-		fmt.Fprintf(os.Stderr, "qocr %s\n\nUsage: qocr [options] <file>\n\nOptions:\n", version)
-		fs.PrintDefaults()
-		fmt.Fprintln(os.Stderr, `
-Examples:
-  qocr scan.png
-  qocr -html -output result.html scan.png
-  qocr -glm scan.png
-  qocr -native document.pdf -output result.md
-  qocr -output result.md document.pdf
-  qocr document.pdf -output result.md
-  qocr -text -output result.txt invoice.pdf`)
+		PrintLogoTo(os.Stderr)
+		fmt.Fprintf(os.Stderr, "  %s %s\n\n", color(colorBold+colorCyan, "qocr"), color(colorDim, version))
+		fmt.Fprintf(os.Stderr, "  %s\n", color(colorBold+colorYellow, "USAGE:"))
+		fmt.Fprintf(os.Stderr, "    %s %s %s\n\n", color(colorGreen, "qocr"), color(colorCyan, "[options]"), color(colorWhite, "<file>"))
+
+		type flagDoc struct {
+			flag string
+			desc string
+		}
+
+		type sectionDoc struct {
+			title string
+			flags []flagDoc
+		}
+
+		sections := []sectionDoc{
+			{
+				title: "ENGINE & OCR OPTIONS",
+				flags: []flagDoc{
+					{"-engine <name>", "OCR engine: baidu, glm, native, or hybrid (default \"baidu\")"},
+					{"-baidu", "Use Baidu engine (alias for -engine baidu)"},
+					{"-glm", "Use GLM engine (alias for -engine glm)"},
+					{"-native", "Extract text directly from PDF text layer (offline, zero AI/GPU)"},
+					{"-hybrid", "Use native PDF text with Baidu table OCR for complex regions"},
+					{"-model <name>", "Model name ID (default \"baidu/Unlimited-OCR\")"},
+					{"-prompt <text>", "Instruction prompt sent with document"},
+					{"-dpi <int>", "Rendering resolution for PDF pages (default 200)"},
+				},
+			},
+			{
+				title: "OUTPUT FORMAT & CONTROLS",
+				flags: []flagDoc{
+					{"-output, -o <file>", "Write output to specified file path instead of stdout"},
+					{"-markdown", "Output as Markdown document (default)"},
+					{"-text", "Output as plain text"},
+					{"-json", "Output as structured JSON"},
+					{"-latex", "Output as LaTeX document"},
+					{"-html", "Output as HTML document"},
+					{"-bbox", "Embed normalized bounding boxes as HTML comments"},
+				},
+			},
+			{
+				title: "SERVER & PERFORMANCE",
+				flags: []flagDoc{
+					{"-endpoint <url>", "Inference server API base URL (default \"http://localhost:8080\")"},
+					{"-port <int>", "Override endpoint port"},
+					{"-max-tokens <N>", "Max tokens to generate per page (0 = default/auto)"},
+					{"-batch-size <N>", "Pages per request for Baidu engine (0 = all in one)"},
+				},
+			},
+			{
+				title: "EXECUTION & OTHER",
+				flags: []flagDoc{
+					{"-resume", "Resume previous interrupted execution from cache (default true)"},
+					{"-raw", "Dump raw model response and exit (debug mode)"},
+					{"-help, -h", "Show this usage information"},
+					{"-version, -v", "Print version and exit"},
+				},
+			},
+		}
+
+		for _, sec := range sections {
+			fmt.Fprintf(os.Stderr, "  %s\n", color(colorBold+colorYellow, sec.title+":"))
+			for _, f := range sec.flags {
+				fmt.Fprintf(os.Stderr, "    %s %s\n", color(colorCyan, fmt.Sprintf("%-22s", f.flag)), color(colorWhite, f.desc))
+			}
+			fmt.Fprintln(os.Stderr)
+		}
+
+		fmt.Fprintf(os.Stderr, "  %s\n", color(colorBold+colorYellow, "EXAMPLES:"))
+		examples := []struct {
+			comment string
+			cmd     string
+		}{
+			{"Basic usage: extract text from image or PDF to stdout/markdown", "qocr scan.png"},
+			{"Save Markdown output to a file", "qocr -output result.md document.pdf"},
+			{"Fast offline extraction from digital PDFs (no GPU, no network required)", "qocr -native document.pdf -output result.md"},
+			{"GLM-OCR engine with custom local vLLM endpoint", "qocr -glm -endpoint http://localhost:8000 scan.jpg"},
+			{"Baidu Unlimited-OCR model with specific server endpoint", "qocr -engine baidu -model baidu/Unlimited-OCR -endpoint http://10.0.0.5:8000 paper.pdf"},
+			{"Hybrid mode: native PDF text + Baidu table/layout OCR", "qocr -hybrid contract.pdf -output contract.md"},
+			{"Export to HTML with bounding boxes embedded as comments", "qocr -html -bbox document.pdf -output result.html"},
+			{"Export directly to LaTeX for academic papers", "qocr -latex -engine baidu -endpoint http://192.168.0.12:4000 paper.pdf -output paper.tex"},
+			{"Structured JSON output for data pipelines", "qocr -json -output data.json invoice.pdf"},
+			{"Batch processing large multi-page PDFs with token limits", "qocr -engine baidu -batch-size 5 -dpi 150 -max-tokens 4096 book.pdf -output book.md"},
+		}
+
+		for _, ex := range examples {
+			fmt.Fprintf(os.Stderr, "    %s\n", color(colorDim, "# "+ex.comment))
+			fmt.Fprintf(os.Stderr, "    %s %s\n\n", color(colorGreen, "$"), color(colorWhite, ex.cmd))
+		}
 	}
 
 	// Simple robust flag separation
@@ -63,7 +144,7 @@ Examples:
 			flags = append(flags, arg)
 			// Match flags that take values
 			switch strings.TrimLeft(arg, "-") {
-			case "endpoint", "port", "model", "prompt", "output", "dpi", "engine", "max-tokens", "batch-size":
+			case "endpoint", "port", "model", "prompt", "output", "o", "dpi", "engine", "max-tokens", "batch-size":
 				if i+1 < len(args) {
 					flags = append(flags, args[i+1])
 					i++
@@ -181,8 +262,8 @@ Examples:
 		}
 	}
 
-	// Print ASCII art and dashboard
-	fmt.Fprintln(os.Stderr, color(colorBold+colorCyan, asciiArt))
+	// Print logo and dashboard
+	PrintLogoTo(os.Stderr)
 	fmt.Fprintf(os.Stderr, "  %s\n", color(colorBold+colorCyan, "QOCR CLIENT — DOCUMENT DIGITIZATION"))
 	fmt.Fprintf(os.Stderr, "%s\n", color(colorDim, "─────────────────────────────────────────────────────────────────"))
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Input file:", color(colorWhite, inputFile))

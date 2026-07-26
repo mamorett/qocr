@@ -1,12 +1,6 @@
 # 📄 qocr
 
-```text
-   __ _  ___   ___ _ __
- / _` |/ _ \ / __| '__|
-| (_| | (_) | (__| |
- \__, |\___/ \___|_|
-    |_|
-```
+![logo.png](logo.png)
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/mamorett/qocr)](https://goreportcard.com/report/github.com/mamorett/qocr)
 [![Go Reference](https://pkg.go.dev/badge/github.com/mamorett/qocr.svg)](https://pkg.go.dev/github.com/mamorett/qocr)
