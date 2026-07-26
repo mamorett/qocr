@@ -235,15 +235,114 @@ func TestNormalizeNativeText(t *testing.T) {
 	}
 }
 
-func TestHybridRegionsSortAndFilter(t *testing.T) {
+func TestHybridRegionsKeepReadingOrderAndFilter(t *testing.T) {
 	pages := [][]OCRBlock{{
 		{Label: "text", BBox2D: []int{0, 400, 900, 600}},
 		{Label: "table", BBox2D: []int{50, 100, 950, 350}},
 		{Label: "noise", BBox2D: []int{0, 0, 1, 1}},
 	}}
 	regions := hybridRegions(pages)
-	if len(regions) != 2 || regions[0].kind != "table" || regions[1].kind != "text" {
+	// Model reading order is preserved; junk labels are dropped.
+	if len(regions) != 2 || regions[0].kind != "text" || regions[1].kind != "table" {
 		t.Fatalf("unexpected regions: %#v", regions)
+	}
+}
+
+func TestHybridRegionsFilterJunk(t *testing.T) {
+	pages := [][]OCRBlock{{
+		{Label: "text", BBox2D: []int{10, 10, 15, 12}},       // tiny dot -> junk
+		{Label: "text", BBox2D: []int{100, 100, 400, 500}},   // real region
+		{Label: "text", BBox2D: []int{5, 990, 18, 999}},      // small corner speck -> junk
+		{Label: "figure", BBox2D: []int{500, 100, 900, 600}}, // real figure
+	}}
+	regions := hybridRegions(pages)
+	if len(regions) != 2 {
+		t.Fatalf("expected 2 regions after junk filter, got %d: %#v", len(regions), regions)
+	}
+	if regions[0].kind != "text" || regions[1].kind != "figure" {
+		t.Fatalf("unexpected regions kept: %#v", regions)
+	}
+}
+
+func TestHybridRegionsCarryModelText(t *testing.T) {
+	// The layout model transcribes each region's text; hybridRegions must carry
+	// it through so extractHybridPage can use it as the primary content source.
+	pages := [][]OCRBlock{{
+		{Label: "title", Content: "Soyuz Mishap Sounds Alarms", BBox2D: []int{383, 61, 873, 98}},
+		{Label: "text", Content: "An unsettling event during a Soyuz spacecraft's descent.", BBox2D: []int{376, 136, 635, 342}},
+		{Label: "image", BBox2D: []int{379, 352, 737, 508}}, // normalized to figure, no text
+	}}
+	regions := hybridRegions(pages)
+	if len(regions) != 3 {
+		t.Fatalf("expected 3 regions, got %d: %#v", len(regions), regions)
+	}
+	if regions[0].text != "Soyuz Mishap Sounds Alarms" {
+		t.Fatalf("title text lost: %#v", regions[0])
+	}
+	if regions[2].kind != "figure" {
+		t.Fatalf("image should normalize to figure, got %q", regions[2].kind)
+	}
+}
+
+func TestNativeParagraphsJoinHyphenation(t *testing.T) {
+	lines := []hybridLine{
+		{text: "Linux's rapid develop-", top: 100, bot: 112, left: 60, right: 460, size: 10},
+		{text: "ment makes it a moving target", top: 114, bot: 126, left: 60, right: 455, size: 10},
+	}
+	para := joinHybridLines(lines)
+	if para.text != "Linux's rapid development makes it a moving target" {
+		t.Fatalf("unexpected join: %q", para.text)
+	}
+}
+
+func TestIsMultiColumnDetPage(t *testing.T) {
+	twoCol := []OCRBlock{
+		{Label: "text", BBox2D: []int{90, 56, 357, 87}},
+		{Label: "text", BBox2D: []int{90, 88, 357, 230}},
+		{Label: "text", BBox2D: []int{660, 453, 918, 532}}, // disjoint right column
+		{Label: "text", BBox2D: []int{660, 533, 918, 689}},
+	}
+	if !isMultiColumnDetPage(twoCol) {
+		t.Errorf("expected two-column page to be detected")
+	}
+
+	singleCol := []OCRBlock{
+		{Label: "title", BBox2D: []int{90, 56, 800, 93}},
+		{Label: "text", BBox2D: []int{90, 100, 800, 230}},
+		{Label: "text", BBox2D: []int{90, 240, 800, 400}},
+	}
+	if isMultiColumnDetPage(singleCol) {
+		t.Errorf("single-column page should not be flagged multi-column")
+	}
+
+	// Table cell bboxes are disjoint but must be ignored so genuine tables keep
+	// the table-rendering path.
+	tableOnly := []OCRBlock{
+		{Label: "table", Content: "<table><tr><td>a</td><td>b</td></tr></table>", BBox2D: []int{50, 100, 950, 300}},
+		{Label: "text", BBox2D: []int{90, 320, 800, 360}},
+	}
+	if isMultiColumnDetPage(tableOnly) {
+		t.Errorf("table blocks should not trigger multi-column detection")
+	}
+}
+
+func TestRenderMarkdown_BaiduMultiColumnKeepsReadingOrder(t *testing.T) {
+	// Two side-by-side columns must render in the model's reading order, not be
+	// fused into a table row.
+	pages := [][]OCRBlock{{
+		{Index: 0, Label: "text", Content: "Left column paragraph one.", BBox2D: []int{90, 56, 357, 87}},
+		{Index: 1, Label: "text", Content: "Left column paragraph two.", BBox2D: []int{90, 88, 357, 230}},
+		{Index: 2, Label: "title", Content: "Right Article", BBox2D: []int{394, 56, 818, 93}},
+		{Index: 3, Label: "text", Content: "Right column body.", BBox2D: []int{660, 104, 918, 230}},
+	}}
+	got := renderMarkdown(pages, false)
+	if strings.Contains(got, "| Left column") || strings.Contains(got, "--- |") {
+		t.Fatalf("columns were fused into a table:\n%s", got)
+	}
+	li := strings.Index(got, "Left column paragraph two.")
+	ri := strings.Index(got, "Right column body.")
+	if li == -1 || ri == -1 || li > ri {
+		t.Fatalf("reading order not preserved:\n%s", got)
 	}
 }
 

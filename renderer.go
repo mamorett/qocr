@@ -87,6 +87,17 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 			continue
 		}
 
+		// Trust the model's <|det|> reading order on multi-column pages. The
+		// model already sequences regions correctly (column by column, article
+		// by article); re-sorting geometrically would interleave columns and
+		// misread side-by-side text as table cells.
+		if isMultiColumnDetPage(cleanPage) {
+			for _, b := range cleanPage {
+				writeMarkdownBlock(&sb, b, showBBox)
+			}
+			continue
+		}
+
 		rows := groupBlocksIntoRows(cleanPage)
 		if len(rows) == 0 {
 			for _, b := range cleanPage {
@@ -302,6 +313,54 @@ func isHybridLayoutPage(page []OCRBlock) bool {
 		}
 	}
 	return false
+}
+
+// isMultiColumnDetPage reports whether a page of bbox-tagged blocks is laid out
+// in two or more text columns. Such pages must be rendered in the model's
+// reading order; the geometric row-grouping path would interleave the columns.
+// Single-column pages (and genuine tables) return false so the table/row logic
+// still applies.
+func isMultiColumnDetPage(page []OCRBlock) bool {
+	type span struct{ left, right int }
+	var spans []span
+	for _, b := range page {
+		// Skip genuine table blocks: they are handled by the table renderer and
+		// their internal cell bboxes would look multi-column.
+		if strings.EqualFold(b.Label, "table") {
+			continue
+		}
+		bbox, ok := getBBox(b.BBox2D)
+		if !ok || len(bbox) < 4 {
+			continue
+		}
+		spans = append(spans, span{left: bbox[0], right: bbox[2]})
+	}
+	if len(spans) < 2 {
+		return false
+	}
+	// Cluster blocks into columns by x-overlap. Two columns exist iff we find
+	// two groups whose x-spans are disjoint (no horizontal overlap).
+	var cols []span
+	for _, s := range spans {
+		placed := false
+		for ci := range cols {
+			// Overlap test with a small tolerance.
+			if s.left <= cols[ci].right+15 && s.right >= cols[ci].left-15 {
+				if s.left < cols[ci].left {
+					cols[ci].left = s.left
+				}
+				if s.right > cols[ci].right {
+					cols[ci].right = s.right
+				}
+				placed = true
+				break
+			}
+		}
+		if !placed {
+			cols = append(cols, s)
+		}
+	}
+	return len(cols) >= 2
 }
 
 func tableRowToPlain(line string) string {

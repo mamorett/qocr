@@ -386,19 +386,41 @@ func groupCharsIntoLines(chars []*responses.GetPageTextStructuredChar) [][]*resp
 }
 
 // assembleLineText concatenates character text, inserting spaces for visible gaps.
+// The gap threshold scales with font size so tight tracking in small fonts does
+// not fuse words together.
 func assembleLineText(line []*responses.GetPageTextStructuredChar) string {
 	var sb strings.Builder
-	for i, c := range line {
+	var prev *responses.GetPageTextStructuredChar
+	for _, c := range line {
 		if c == nil {
 			continue
 		}
-		if i > 0 && line[i-1] != nil {
-			gap := c.PointPosition.Left - line[i-1].PointPosition.Right
-			if gap > 1.5 && sb.Len() > 0 && sb.String()[sb.Len()-1] != ' ' {
-				sb.WriteRune(' ')
+		if prev != nil {
+			gap := c.PointPosition.Left - prev.PointPosition.Right
+			// Word-space threshold: a fraction of the font size, clamped. A real
+			// inter-word gap is typically ≥ ~25% of the font size.
+			threshold := 1.5
+			if prev.FontInformation != nil {
+				sz := prev.FontInformation.RenderedSize
+				if sz <= 0 {
+					sz = prev.FontInformation.Size
+				}
+				if sz > 0 {
+					threshold = sz * 0.22
+					if threshold < 1.0 {
+						threshold = 1.0
+					}
+				}
+			}
+			if gap > threshold && sb.Len() > 0 {
+				s := sb.String()
+				if s[len(s)-1] != ' ' {
+					sb.WriteRune(' ')
+				}
 			}
 		}
 		sb.WriteString(c.Text)
+		prev = c
 	}
 	return sb.String()
 }
