@@ -12,10 +12,10 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/mamorett/qocr.svg)](https://pkg.go.dev/github.com/mamorett/qocr)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A lightweight, **self-contained** CLI that extracts structured text from images and multi-page PDFs using either the **GLM-OCR** model or the **Baidu Unlimited-OCR** model — selectable via the `-engine` flag (`glm` is the default).
+A lightweight, **self-contained** CLI that extracts structured text from images and multi-page PDFs using either the **GLM-OCR** model, the **Baidu Unlimited-OCR** model, or the built-in **native text-layer extractor** (no inference engine needed, no GPU, no network) — all selectable via flags.
 
 > [!IMPORTANT]
-> This tool does **not** bundle the OCR model. You must run an OpenAI-compatible inference engine (such as **vLLM**) serving either the `zai-org/GLM-OCR` model (default engine, `-engine glm`) or the `baidu/Unlimited-OCR` model (switch with `-engine baidu`). The tool is distributed as Go source code at `github.com/mamorett/qocr`. See the [Prerequisites](#-prerequisites) and [Baidu Unlimited-OCR Engine](#-baidu-unlimited-ocr-engine) sections below for setup details for each.
+> The `-native` mode requires **no inference engine**. It reads text directly from the PDF's embedded text layer. The AI-powered modes still require an OpenAI-compatible inference engine (such as **vLLM**). See the [Native Text Extraction](#-native-text-extraction-no-ocr) section for details.
 
 ---
 
@@ -93,9 +93,10 @@ qocr -endpoint http://10.0.0.5:8000 document.pdf
 
 - 🚀 **Zero Dependencies**: Built with pure Go + WebAssembly. No need for `poppler`, `mupdf`, or any system-level PDF tools.
 - 📦 **Self-Contained**: PDF rendering is embedded inside the binary. Single file, works everywhere.
-- 🔌 **Multi-Engine Support**: Switch between **GLM-OCR** (default, `-engine glm`) and **Baidu Unlimited-OCR** (`-engine baidu`) without changing your workflow — same CLI flags, same output formats.
-- 📑 **Robust Multi-Page PDF Support**: Renders pages locally, then dispatches to the engine — sequentially for GLM-OCR, batched per request for Baidu to leverage native multi-page reasoning.
-- 🎯 **Multiple Outputs**: Get results in **Markdown**, **Plain Text**, **JSON**, or **LaTeX**.
+- 🔌 **Multi-Engine Support**: Powered by **Baidu Unlimited-OCR** by default (`-engine baidu`), with support for **GLM-OCR** (`-engine glm` / `-glm`) and the built-in **native text-layer extractor** (`-native`) — same CLI flags, same output formats.
+- 📑 **Robust Multi-Page PDF Support**: Renders pages locally, then dispatches to the engine — batched per request for Baidu to leverage native multi-page reasoning, or sequentially for GLM-OCR.
+- 🔤 **Native Text Extraction**: For digitally-born PDFs, extract text, headings, and tables directly from the PDF's internal text layer with **zero inference** — offline, instant, GPU-free.
+- 🎯 **Multiple Outputs**: Get results in **Markdown**, **HTML**, **Plain Text**, **JSON**, or **LaTeX**.
 - 🌍 **Cross-Platform**: Compiled for Linux, macOS, and Windows (AMD64 & ARM64).
 
 ---
@@ -142,20 +143,24 @@ ocr [options] <file>
 | :--- | :--- | :--- |
 | `-endpoint` | API base URL | `http://localhost:8080` |
 | `-port` | Override port in endpoint URL | `0` (uses port from endpoint) |
-| `-model` | Model name | `zai-org/GLM-OCR` (or `baidu/Unlimited-OCR` in baidu mode) |
-| `-engine` | OCR engine to use: `glm` or `baidu` | `glm` |
-| `-prompt` | Instruction sent with the file | `Extract all text from this document` (or automatic prompt recipes in baidu mode) |
+| `-model` | Model name | `baidu/Unlimited-OCR` (or `zai-org/GLM-OCR` in glm mode) |
+| `-engine` | OCR engine to use: `baidu`, `glm`, `native`, or `hybrid` | `baidu` |
+| `-baidu` | Use Baidu engine (alias for `-engine baidu`) | `false` |
+| `-glm` | Use GLM engine (alias for `-engine glm`) | `false` |
+| `-native` | Extract text from PDF text layer — no OCR, no AI, no network | `false` |
+| `-hybrid` | Use native PDF text with Baidu table OCR | `false` |
+| `-prompt` | Instruction sent with the file | Automatic prompt recipe (`<image>document parsing.` / `<image>Multi page parsing.`) |
 | `-output` | Write output to file instead of stdout | `stdout` |
 | `-dpi` | PDF rendering resolution | `200` |
 | `-resume` | Resume previous execution if interrupted | `true` |
-| `-baidu` | Use Baidu engine (alias for `-engine baidu`) | `false` |
 | `-markdown` | Output as Markdown | `true` |
+| `-html` | Output as HTML document (1:1 detection indexing with inline metadata) | `false` |
 | `-text` | Output as plain text (flattens tables) | `false` |
 | `-json` | Output as structured JSON (includes dimensions & rotation metadata) | `false` |
 | `-latex` | Output as LaTeX document fragment (tables are auto-scaled) | `false` |
 | `-bbox` | Embed normalized bounding boxes as HTML comments in markdown | `false` |
 | `-batch-size` | Number of pages per request (Baidu mode only, defaults to all pages for bounded batching) | `0` (all pages when using Baidu) |
-| `-max-tokens` | Max tokens to generate (0 means use default: unset for glm, 8192 for baidu) | `0` |
+| `-max-tokens` | Max tokens to generate (0 means use default: 8192 for baidu, unset for glm) | `0` |
 | `-raw` | Dump raw model response (debug) | `false` |
 | `-help` | Show usage information | `false` |
 | `-version` | Print version and exit | `false` |
@@ -200,9 +205,14 @@ Switch to Baidu's model with `-engine baidu` for a different prompt recipe and p
 qocr -engine baidu -endpoint http://192.168.0.12:4000 -model baidu/Unlimited-OCR document.pdf -latex -output result.tex
 ```
 
+### Native PDF Extraction (No OCR)
+For digitally-born PDFs — reports, papers, word-processor exports — extract text and tables instantly without any inference engine:
+```bash
+qocr -native document.pdf -output result.md
+```
+
 ---
 
-## ⚙️ How it Works
 
 Both the **GLM-OCR** and **Baidu Unlimited-OCR** models require images as input. Since neither model can process raw PDF blobs directly, this CLI performs the following steps (engine-dependent behaviors are noted inline):
 
@@ -217,6 +227,9 @@ Both the **GLM-OCR** and **Baidu Unlimited-OCR** models require images as input.
 
 ### 📝 Markdown (Default)
 Maps block labels (title, text, table, figure) to appropriate Markdown elements. Multi-page documents are separated by `---` lines and include page comments.
+
+### 🌐 HTML (`-html`)
+Converts detections directly into structured, editable HTML elements (`<h1>`, `<h2>`, `<p>`, `ocr-table`, `ocr-image`, `ocr-page-number`) with `data-detection-index` attributes for 1:1 indexing and DOM manipulation/translation.
 
 ### 📄 Plain Text (`-text`)
 Strips all Markdown decoration and flattens tables for easy copy-pasting or grep-ing.
@@ -243,6 +256,49 @@ Example usage:
 # Using Baidu engine with custom model and endpoint
 qocr -engine baidu -model <your-vllm-model-id> -endpoint http://192.168.0.12:4000 document.pdf -latex -output result.tex
 ```
+
+---
+
+## 🔤 Native Text Extraction (No-OCR)
+
+For **digitally-born PDFs** — exported from Word, LaTeX, InDesign, or any PDF writer — qocr can extract text, headings, and tables **directly from the PDF's internal text layer** with zero inference engine, zero GPU, and zero network calls.
+
+```bash
+qocr -native document.pdf -output result.md
+```
+
+### How it works
+
+The native mode uses a **two-tier detection strategy**:
+
+#### Tier 1 — Tagged PDFs (Word exports, InDesign, PDF/UA, accessibility-compliant docs)
+
+Many professionally-produced PDFs embed a full **logical structure tree** with semantic `<Table>`, `<TR>`, `<TD>`, `<TH>`, `<H1>`–`<H6>`, `<P>` elements. When detected, qocr reads this tree directly via PDFium's `FPDF_StructTree` API — the document author's own structural intent, stored in the file. Table cells are extracted **exactly as authored**, with zero spatial guessing.
+
+#### Tier 2 — Untagged PDFs (LaTeX output, older tools)
+
+For PDFs without a structure tree, qocr uses **[GxPDF](https://github.com/coregx/gxpdf)'s 4-Pass Hybrid table detection** — a pure-Go, MIT-licensed library with no CGO:
+
+- **Pass 1**: Gap detection (adaptive threshold)
+- **Pass 2**: Overlap detection (Tabula-inspired)
+- **Pass 3**: Alignment detection (geometric column clustering)
+- **Pass 4**: Multi-line cell merging
+
+#### Heading detection (both tiers)
+
+Headings are detected using **actual font size metadata from the PDF's internal font tables**, read via `GetPageTextStructured(CollectFontInformation=true)`. The modal (most-frequent) font size on the page becomes the body-text baseline:
+
+| Ratio vs. body font size | Markdown output |
+|:---|:---|
+| ≥ 1.6× | `## Heading` (title) |
+| ≥ 1.25× | `### Heading` (header) |
+| Bold at body size, short line | `### Heading` (header) |
+| Otherwise | Paragraph |
+
+### Limitations
+
+- **Scanned PDFs**: Produces empty output. Use the default OCR mode for scanned documents.
+- **Complex layouts**: Multi-column or magazine-style layouts may have reading-order issues. Use OCR mode for maximum fidelity.
 
 ---
 

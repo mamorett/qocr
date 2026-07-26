@@ -15,25 +15,29 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("ocr", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	endpoint   := fs.String("endpoint", "http://localhost:8080", "API base URL")
-	port       := fs.Int("port", 0, "Override port in --endpoint")
-	model      := fs.String("model", "zai-org/GLM-OCR", "Model name")
-	prompt     := fs.String("prompt", defaultPrompt, "Instruction sent with the file")
+	endpoint := fs.String("endpoint", "http://localhost:8080", "API base URL")
+	port := fs.Int("port", 0, "Override port in --endpoint")
+	model := fs.String("model", "baidu/Unlimited-OCR", "Model name")
+	prompt := fs.String("prompt", defaultPrompt, "Instruction sent with the file")
 	outputFile := fs.String("output", "", "Write output to file instead of stdout")
-	_          = fs.Bool("markdown", false, "Output as Markdown (default)")
-	fmtText    := fs.Bool("text", false, "Output as plain text")
-	fmtJSON    := fs.Bool("json", false, "Output as JSON")
-	fmtLatex   := fs.Bool("latex", false, "Output as LaTeX document")
-	showBBox   := fs.Bool("bbox", false, "Embed normalized bounding boxes as HTML comments in markdown output")
-	rawMode    := fs.Bool("raw", false, "Dump raw model response and exit (debug)")
-	showHelp   := fs.Bool("help", false, "Show usage information")
-	showVer    := fs.Bool("version", false, "Print version and exit")
-	dpi        := fs.Int("dpi", 200, "Rendering resolution for PDF pages")
-	resume     := fs.Bool("resume", true, "Resume previous execution if interrupted")
-	engine     := fs.String("engine", "glm", "OCR engine: glm (zai-org/GLM-OCR) or baidu (baidu/Unlimited-OCR)")
-	baidu      := fs.Bool("baidu", false, "Use Baidu engine (alias for -engine baidu)")
-	maxTokens  := fs.Int("max-tokens", 0, "Max tokens to generate (0 means use default: unset for glm, 8192 for baidu)")
-	batchSize  := fs.Int("batch-size", 0, "Number of pages per request for baidu (0 means all in one request)")
+	_ = fs.Bool("markdown", false, "Output as Markdown (default)")
+	fmtText := fs.Bool("text", false, "Output as plain text")
+	fmtJSON := fs.Bool("json", false, "Output as JSON")
+	fmtLatex := fs.Bool("latex", false, "Output as LaTeX document")
+	fmtHTML := fs.Bool("html", false, "Output as HTML document")
+	showBBox := fs.Bool("bbox", false, "Embed normalized bounding boxes as HTML comments in markdown output")
+	rawMode := fs.Bool("raw", false, "Dump raw model response and exit (debug)")
+	showHelp := fs.Bool("help", false, "Show usage information")
+	showVer := fs.Bool("version", false, "Print version and exit")
+	dpi := fs.Int("dpi", 200, "Rendering resolution for PDF pages")
+	resume := fs.Bool("resume", true, "Resume previous execution if interrupted")
+	engine := fs.String("engine", "baidu", "OCR engine: baidu, glm, native, or hybrid (native text + Baidu table OCR)")
+	baidu := fs.Bool("baidu", false, "Use Baidu engine (alias for -engine baidu)")
+	glm := fs.Bool("glm", false, "Use GLM engine (alias for -engine glm)")
+	native := fs.Bool("native", false, "Extract text directly from PDF text layer (no OCR, no AI, no network)")
+	hybrid := fs.Bool("hybrid", false, "Use native PDF text with Baidu layout/table OCR for complex regions")
+	maxTokens := fs.Int("max-tokens", 0, "Max tokens to generate (0 means use default: unset for glm, 8192 for baidu)")
+	batchSize := fs.Int("batch-size", 0, "Number of pages per request for baidu (0 means all in one request)")
 
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, color(colorBold+colorCyan, asciiArt))
@@ -42,7 +46,9 @@ func run(args []string) error {
 		fmt.Fprintln(os.Stderr, `
 Examples:
   qocr scan.png
-  qocr -baidu scan.png
+  qocr -html -output result.html scan.png
+  qocr -glm scan.png
+  qocr -native document.pdf -output result.md
   qocr -output result.md document.pdf
   qocr document.pdf -output result.md
   qocr -text -output result.txt invoice.pdf`)
@@ -97,9 +103,22 @@ Examples:
 	if *baidu {
 		eng = EngineBaidu
 	}
-	if eng == EngineBaidu {
+	if *glm {
+		eng = EngineGLM
+	}
+	if *native {
+		eng = EngineNative
+	}
+	if *hybrid {
+		eng = EngineHybrid
+	}
+	if eng == EngineBaidu || eng == EngineHybrid {
 		if *model == "zai-org/GLM-OCR" {
 			*model = "baidu/Unlimited-OCR"
+		}
+	} else if eng == EngineGLM {
+		if *model == "baidu/Unlimited-OCR" {
+			*model = "zai-org/GLM-OCR"
 		}
 	}
 
@@ -169,8 +188,13 @@ Examples:
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Input file:", color(colorWhite, inputFile))
 	fmt.Fprintf(os.Stderr, "  %s %-15s %d page(s)\n", color(colorBold+colorCyan, "•"), "Pages:", totalPages)
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Engine:", color(colorWhite, string(eng)))
-	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Model:", color(colorWhite, *model))
-	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Endpoint:", color(colorWhite, base))
+	if eng == EngineNative {
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Model:", color(colorDim, "N/A (text layer)"))
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Endpoint:", color(colorDim, "N/A (offline)"))
+	} else {
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Model:", color(colorWhite, *model))
+		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Endpoint:", color(colorWhite, base))
+	}
 	if *outputFile != "" {
 		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Output file:", color(colorWhite, *outputFile))
 	} else {
@@ -201,7 +225,72 @@ Examples:
 	var pageDims []PageDim
 	startTime := time.Now()
 
-	if eng == EngineBaidu {
+	if eng == EngineNative {
+		// ── Native text-layer extraction (no OCR, no network) ────────────────
+		if !isPDF {
+			return fmt.Errorf("the -native flag requires a PDF input file (got %q)", inputFile)
+		}
+		pageDims = make([]PageDim, totalPages)
+		ocrStartTime := time.Now()
+		drawProgressBar(0, totalPages, ocrStartTime, "extracting text layer...")
+		for i := 0; i < totalPages; i++ {
+			var blocks []OCRBlock
+			var dim PageDim
+			var found bool
+
+			if *resume && resumeState != nil {
+				var content string
+				content, found = findCachedPage(resumeState, i)
+				if found && i < len(resumeState.PageDims) {
+					pageDims[i] = resumeState.PageDims[i]
+					if found {
+						pages, _ := parseOCRContent(content)
+						if len(pages) > 0 {
+							blocks = pages[0]
+						}
+					}
+				}
+			}
+
+			if found {
+				drawProgressBar(i+1, totalPages, ocrStartTime, "restored from cache")
+			} else {
+				drawProgressBar(i, totalPages, ocrStartTime, fmt.Sprintf("extracting page %d...", i+1))
+				var err error
+				blocks, dim, err = extractNativePage(inputFile, i)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\n")
+					return fmt.Errorf("native extraction page %d: %w", i+1, err)
+				}
+				pageDims[i] = dim
+				drawProgressBar(i+1, totalPages, ocrStartTime, "")
+			}
+
+			allPages = append(allPages, blocks)
+		}
+		fmt.Fprintln(os.Stderr)
+
+	} else if eng == EngineHybrid {
+		if !isPDF {
+			return fmt.Errorf("the -hybrid flag requires a PDF input file (got %q)", inputFile)
+		}
+		pageDims = make([]PageDim, totalPages)
+		ocrStartTime := time.Now()
+		drawProgressBar(0, totalPages, ocrStartTime, "mapping page layout...")
+		for i := 0; i < totalPages; i++ {
+			drawProgressBar(i, totalPages, ocrStartTime, fmt.Sprintf("processing page %d...", i+1))
+			blocks, dim, err := extractHybridPage(inputFile, i, apiURL, *model, *maxTokens)
+			if err != nil {
+				fmt.Fprintln(os.Stderr)
+				return fmt.Errorf("hybrid extraction page %d: %w", i+1, err)
+			}
+			allPages = append(allPages, blocks)
+			pageDims[i] = dim
+			drawProgressBar(i+1, totalPages, ocrStartTime, "")
+		}
+		fmt.Fprintln(os.Stderr)
+
+	} else if eng == EngineBaidu {
 		var rawDoc string
 		var cacheHit bool
 		if *resume && resumeState != nil && resumeState.RawDocument != "" {
@@ -274,7 +363,7 @@ Examples:
 				} else {
 					drawProgressBar(start, totalPages, ocrStartTime, fmt.Sprintf("recognizing page %d...", start+1))
 				}
-				
+
 				cr, err := callAPIBaidu(apiURL, *model, batchPrompt, batchURIs, isMulti, *maxTokens)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "\n")
@@ -332,14 +421,14 @@ Examples:
 		for i := 0; i < totalPages; i++ {
 			var content string
 			var found bool
-			
+
 			if *resume && resumeState != nil {
 				content, found = findCachedPage(resumeState, i)
 				if found && i < len(resumeState.PageDims) {
 					pageDims[i] = resumeState.PageDims[i]
 				}
 			}
-			
+
 			if found {
 				drawProgressBar(i+1, totalPages, ocrStartTime, "restored from cache")
 			} else {
@@ -364,7 +453,7 @@ Examples:
 				pageDims[i] = dim
 
 				drawProgressBar(i, totalPages, ocrStartTime, fmt.Sprintf("recognizing page %d...", i+1))
-				
+
 				pageStart := time.Now()
 				cr, err := callAPI(apiURL, *model, *prompt, []string{uri}, *maxTokens)
 				if err != nil {
@@ -379,22 +468,22 @@ Examples:
 					fmt.Fprintf(os.Stderr, "\n")
 					return fmt.Errorf("no choices on page %d", i+1)
 				}
-				
+
 				content = cr.Choices[0].Message.Content
 				_ = time.Since(pageStart)
-				
+
 				if *resume && resumePath != "" {
 					if resumeState == nil {
 						resumeState = &ResumeState{
-							InputFile:  inputFile,
-							ModTime:    modTime,
-							Size:       size,
-							Prompt:     *prompt,
-							Model:      *model,
-							DPI:        *dpi,
-							APIURL:     apiURL,
-							Pages:      []PageState{},
-							PageDims:   make([]PageDim, totalPages),
+							InputFile: inputFile,
+							ModTime:   modTime,
+							Size:      size,
+							Prompt:    *prompt,
+							Model:     *model,
+							DPI:       *dpi,
+							APIURL:    apiURL,
+							Pages:     []PageState{},
+							PageDims:  make([]PageDim, totalPages),
 						}
 					}
 					if len(resumeState.PageDims) < totalPages {
@@ -411,15 +500,15 @@ Examples:
 						fmt.Fprintf(os.Stderr, "\n%s Failed to save resume state: %v\n", color(colorYellow, "⚠️"), err)
 					}
 				}
-				
+
 				drawProgressBar(i+1, totalPages, ocrStartTime, "")
 			}
-			
+
 			if *rawMode {
 				fmt.Println(content)
 				continue
 			}
-			
+
 			pages, _ := parseOCRContent(content)
 			if len(pages) > 0 {
 				allPages = append(allPages, pages[0])
@@ -451,6 +540,8 @@ Examples:
 		if err != nil {
 			return fmt.Errorf("encoding LaTeX: %w", err)
 		}
+	case *fmtHTML:
+		result = renderHTML(allPages)
 	default:
 		result = renderMarkdown(allPages, *showBBox)
 	}

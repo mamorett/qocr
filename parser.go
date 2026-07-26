@@ -194,8 +194,7 @@ func parseBaiduChunkWithDet(chunk string) []OCRBlock {
 
 		blockContent = strings.TrimSpace(blockContent)
 		blockContent = stripReferenceTags(blockContent)
-		blockContent = strings.ReplaceAll(blockContent, "<|det|>", "")
-		blockContent = strings.ReplaceAll(blockContent, "<|/det|>", "")
+		blockContent = stripDetTags(blockContent)
 
 		blocks = append(blocks, OCRBlock{
 			Index:   index,
@@ -246,8 +245,7 @@ func parseBaiduSiblingFormat(chunk string) ([]OCRBlock, bool) {
 					if validBbox {
 						content := strings.TrimSpace(line[bracketEnd+1:])
 						content = stripReferenceTags(content)
-						content = strings.ReplaceAll(content, "<|det|>", "")
-						content = strings.ReplaceAll(content, "<|/det|>", "")
+						content = stripDetTags(content)
 
 						blocks = append(blocks, OCRBlock{
 							Index:   index,
@@ -325,3 +323,66 @@ func parseBaiduContent(raw string) [][]OCRBlock {
 	}
 	return pages
 }
+
+func reconstructStructure(blocks []OCRBlock) []StructuredBlock {
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	var result []StructuredBlock
+	var currentPara *StructuredBlock
+
+	for _, b := range blocks {
+		detType := strings.ToLower(b.Label)
+		text := blockContentString(b)
+
+		switch detType {
+		case "title":
+			if currentPara != nil {
+				result = append(result, *currentPara)
+				currentPara = nil
+			}
+			level := 2
+			if bbox, ok := getBBox(b.BBox2D); ok && len(bbox) >= 4 {
+				if bbox[3]-bbox[1] > 60 {
+					level = 1
+				}
+			}
+			result = append(result, StructuredBlock{
+				BlockType: "heading",
+				Level:     level,
+				Text:      text,
+				BBox:      b.BBox2D,
+			})
+
+		case "image", "page_number", "table":
+			if currentPara != nil {
+				result = append(result, *currentPara)
+				currentPara = nil
+			}
+			result = append(result, StructuredBlock{
+				BlockType: detType,
+				Text:      text,
+				BBox:      b.BBox2D,
+			})
+
+		default:
+			if currentPara == nil {
+				currentPara = &StructuredBlock{
+					BlockType: "paragraph",
+					Text:      text,
+					BBox:      b.BBox2D,
+				}
+			} else {
+				currentPara.Text += "\n" + text
+			}
+		}
+	}
+
+	if currentPara != nil {
+		result = append(result, *currentPara)
+	}
+
+	return result
+}
+

@@ -63,7 +63,7 @@ func TestFindCachedPage(t *testing.T) {
 }
 
 func TestParseBaiduContent_SinglePage(t *testing.T) {
-	raw := "<|det|>title [14, 0, 999, 999]<|/det|>Bai du 百度"
+	raw := "<|det|>title [14, 0, 999, 999]<|/det|>Baidu"
 	pages := parseBaiduContent(raw)
 	if len(pages) != 1 {
 		t.Fatalf("expected 1 page, got %d", len(pages))
@@ -76,8 +76,8 @@ func TestParseBaiduContent_SinglePage(t *testing.T) {
 	if b.Label != "title" {
 		t.Errorf("expected label 'title', got %q", b.Label)
 	}
-	if b.Content != "Bai du 百度" {
-		t.Errorf("expected content 'Bai du 百度', got %q", b.Content)
+	if b.Content != "Baidu" {
+		t.Errorf("expected content 'Baidu', got %q", b.Content)
 	}
 	bbox, ok := getBBox(b.BBox2D)
 	if !ok || len(bbox) != 4 || bbox[0] != 14 || bbox[1] != 0 || bbox[2] != 999 || bbox[3] != 999 {
@@ -131,6 +131,15 @@ func TestParseBaiduContent_Malformed(t *testing.T) {
 	}
 }
 
+func TestStripDetTags(t *testing.T) {
+	input := "<|det|>title [45, 64, 138, 125]<|/det|>Dividends"
+	expected := "Dividends"
+	got := stripDetTags(input)
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
 func TestRenderLatex(t *testing.T) {
 	pages := [][]OCRBlock{
 		{
@@ -170,7 +179,7 @@ func TestRenderLatex(t *testing.T) {
 func TestHTMLTableToLatex(t *testing.T) {
 	htmlTable := "<table><tr><th>Header 1</th><th>Header 2</th></tr><tr><td>Cell 1</td><td>Cell 2</td></tr></table>"
 	expected := "\\begin{table}[h]\n\\centering\n\\sbox{\\tblbox}{%\n\\small\n\\begin{tabular}{l l}\n\\hline\nHeader 1 & Header 2 \\\\ \\relax\n\\hline\nCell 1 & Cell 2 \\\\ \\relax\n\\hline\n\\end{tabular}%\n}\n\\ifdim\\wd\\tblbox>\\linewidth\n  \\resizebox{\\linewidth}{!}{\\usebox{\\tblbox}}%\n\\else\n  \\usebox{\\tblbox}%\n\\fi\n\\end{table}\n"
-	
+
 	result := htmlTableToLatex(htmlTable)
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
@@ -180,9 +189,142 @@ func TestHTMLTableToLatex(t *testing.T) {
 func TestHTMLTableToMarkdown(t *testing.T) {
 	htmlTable := "<table><tr><th>Header 1</th><th>Header 2</th></tr><tr><td>Cell 1</td><td>Cell 2</td></tr></table>"
 	expected := "| Header 1 | Header 2 |\n| --- | --- |\n| Cell 1 | Cell 2 |"
-	
+
 	result := htmlTableToMarkdown(htmlTable)
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
 	}
 }
+
+func TestHTMLTableToMarkdown_NormalizesAndEscapesCells(t *testing.T) {
+	htmlTable := `<TABLE class="data"><TR><TH>Plan | tier</TH><TH>Cost</TH></TR><TR><TD>Pro<br>annual</TD><TD>$10 &amp; tax</TD></TR><TR><TD>Free</TD></TR></TABLE>`
+	expected := "| Plan \\| tier | Cost |\n| --- | --- |\n| Pro annual | $10 & tax |\n| Free |  |"
+	if result := htmlTableToMarkdown(htmlTable); result != expected {
+		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
+	}
+}
+
+func TestRenderMarkdown_NativeTableDoesNotLeakHTML(t *testing.T) {
+	pages := [][]OCRBlock{{
+		{Index: 0, Label: "title", Content: "Synthetic report"},
+		{Index: 1, Label: "table", Content: "<table><tr><th>Name</th><th>Score</th></tr><tr><td>Ada</td><td>10</td></tr></table>"},
+	}}
+	result := renderMarkdown(pages, false)
+	if strings.Contains(strings.ToLower(result), "<table") {
+		t.Fatalf("native Markdown must not contain raw table HTML: %q", result)
+	}
+	expected := "## Synthetic report\n\n| Name | Score |\n| --- | --- |\n| Ada | 10 |"
+	if result != expected {
+		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
+	}
+}
+func TestRenderMarkdown_ShowBBox(t *testing.T) {
+	pages := [][]OCRBlock{{
+		{Index: 0, Label: "text", Content: "Sample paragraph", BBox2D: []int{10, 20, 30, 40}},
+	}}
+	result := renderMarkdown(pages, true)
+	if !strings.Contains(result, "<!-- bbox: [10 20 30 40] -->") {
+		t.Errorf("expected output to contain bounding box comment, got:\n%s", result)
+	}
+}
+
+func TestNormalizeNativeText(t *testing.T) {
+	input := "\r\nA\u00a0B\r\nC\r\x00"
+	if got, want := normalizeNativeText(input), "A B\nC"; got != want {
+		t.Errorf("normalizeNativeText() = %q, want %q", got, want)
+	}
+}
+
+func TestHybridRegionsSortAndFilter(t *testing.T) {
+	pages := [][]OCRBlock{{
+		{Label: "text", BBox2D: []int{0, 400, 900, 600}},
+		{Label: "table", BBox2D: []int{50, 100, 950, 350}},
+		{Label: "noise", BBox2D: []int{0, 0, 1, 1}},
+	}}
+	regions := hybridRegions(pages)
+	if len(regions) != 2 || regions[0].kind != "table" || regions[1].kind != "text" {
+		t.Fatalf("unexpected regions: %#v", regions)
+	}
+}
+
+func TestRenderMarkdown_HybridKeepsBaiduTableMarkdown(t *testing.T) {
+	pages := [][]OCRBlock{{
+		{Index: 0, Label: "hybrid-text", Content: "Native text above."},
+		{Index: 1, Label: "hybrid-table", Content: "| Item | Count |\n| --- | ---: |\n| Valve | 4 |"},
+		{Index: 2, Label: "hybrid-text", Content: "Native text below."},
+	}}
+	want := "Native text above.\n\n| Item | Count |\n| --- | ---: |\n| Valve | 4 |\n\nNative text below."
+	if got := renderMarkdown(pages, false); got != want {
+		t.Errorf("renderMarkdown() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderHTML(t *testing.T) {
+	pages := [][]OCRBlock{
+		{
+			{Index: 0, Label: "title", Content: "Main Title", BBox2D: []int{0, 0, 100, 100}}, // h = 100 - 0 = 100 (>60) -> h1
+			{Index: 1, Label: "title", Content: "Sub Title", BBox2D: []int{0, 0, 40, 40}},   // h = 40 - 0 = 40 (<=60) -> h2
+			{Index: 2, Label: "text", Content: "Hello <World>", BBox2D: []int{0, 0, 10, 10}},
+			{Index: 3, Label: "image", Content: "", BBox2D: []int{0, 0, 10, 10}},
+			{Index: 4, Label: "table", Content: "Table Content", BBox2D: []int{0, 0, 10, 10}},
+			{Index: 5, Label: "page_number", Content: "1", BBox2D: []int{0, 0, 10, 10}},
+		},
+	}
+
+	htmlOut := renderHTML(pages)
+
+	expectedSnippet1 := `<div class="ocr-page" data-page="1">`
+	expectedSnippet2 := `<h1 class="ocr-heading" contenteditable="true" data-detection-index="0">Main Title</h1>`
+	expectedSnippet3 := `<h2 class="ocr-heading" contenteditable="true" data-detection-index="1">Sub Title</h2>`
+	expectedSnippet4 := `<p class="ocr-text" contenteditable="true" data-detection-index="2">Hello &lt;World&gt;</p>`
+	expectedSnippet5 := `<div class="ocr-image" data-detection-index="3"><span class="image-placeholder">🖼 Image Area</span></div>`
+	expectedSnippet6 := `<div class="ocr-table" contenteditable="true" data-detection-index="4">Table Content</div>`
+	expectedSnippet7 := `<span class="ocr-page-number" data-detection-index="5">1</span>`
+
+	for _, snippet := range []string{expectedSnippet1, expectedSnippet2, expectedSnippet3, expectedSnippet4, expectedSnippet5, expectedSnippet6, expectedSnippet7} {
+		if !strings.Contains(htmlOut, snippet) {
+			t.Errorf("expected HTML output to contain %q, got:\n%s", snippet, htmlOut)
+		}
+	}
+}
+
+func TestRenderHTML_EmptyPages(t *testing.T) {
+	out := renderHTML([][]OCRBlock{})
+	if out != `<div class="ocr-page empty"><p class="muted">No content detected</p></div>` {
+		t.Errorf("unexpected empty output: %q", out)
+	}
+
+	outSingle := renderHTML([][]OCRBlock{{}})
+	if outSingle != `<div class="ocr-page empty" data-page="1"><p class="muted">No content detected</p></div>` {
+		t.Errorf("unexpected single empty page output: %q", outSingle)
+	}
+}
+
+func TestReconstructStructure(t *testing.T) {
+	blocks := []OCRBlock{
+		{Index: 0, Label: "title", Content: "Big Title", BBox2D: []int{0, 0, 100, 100}},
+		{Index: 1, Label: "text", Content: "First paragraph line 1"},
+		{Index: 2, Label: "text", Content: "First paragraph line 2"},
+		{Index: 3, Label: "image", Content: "Diagram"},
+		{Index: 4, Label: "text", Content: "Second paragraph"},
+	}
+
+	structured := reconstructStructure(blocks)
+	if len(structured) != 4 {
+		t.Fatalf("expected 4 structured blocks, got %d", len(structured))
+	}
+
+	if structured[0].BlockType != "heading" || structured[0].Level != 1 || structured[0].Text != "Big Title" {
+		t.Errorf("unexpected block 0: %#v", structured[0])
+	}
+	if structured[1].BlockType != "paragraph" || structured[1].Text != "First paragraph line 1\nFirst paragraph line 2" {
+		t.Errorf("unexpected block 1: %#v", structured[1])
+	}
+	if structured[2].BlockType != "image" || structured[2].Text != "Diagram" {
+		t.Errorf("unexpected block 2: %#v", structured[2])
+	}
+	if structured[3].BlockType != "paragraph" || structured[3].Text != "Second paragraph" {
+		t.Errorf("unexpected block 3: %#v", structured[3])
+	}
+}
+
