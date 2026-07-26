@@ -131,6 +131,15 @@ func TestParseBaiduContent_Malformed(t *testing.T) {
 	}
 }
 
+func TestStripDetTags(t *testing.T) {
+	input := "<|det|>title [45, 64, 138, 125]<|/det|>Dividends"
+	expected := "Dividends"
+	got := stripDetTags(input)
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
 func TestRenderLatex(t *testing.T) {
 	pages := [][]OCRBlock{
 		{

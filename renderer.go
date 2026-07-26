@@ -47,18 +47,23 @@ var (
 )
 
 func blockContentString(b OCRBlock) string {
+	var res string
 	switch v := b.Content.(type) {
 	case string:
-		return v
+		res = v
 	case []interface{}:
 		var items []string
 		for _, item := range v {
 			items = append(items, fmt.Sprint(item))
 		}
-		return strings.Join(items, "\n")
+		res = strings.Join(items, "\n")
 	default:
-		return fmt.Sprint(b.Content)
+		res = fmt.Sprint(b.Content)
 	}
+	if strings.Contains(res, "<|det|>") || strings.Contains(res, "<|/det|>") {
+		res = stripDetTags(res)
+	}
+	return res
 }
 
 func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {

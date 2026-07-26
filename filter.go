@@ -7,6 +7,9 @@ import (
 
 var refRegexp = regexp.MustCompile(`(?i)<[|/]*ref[|/]*>(.*?)<[|/]+ref[|/]+>`)
 var refLeftoverRegexp = regexp.MustCompile(`(?i)<[|/]*ref[|/]*>`)
+var detTagPattern = regexp.MustCompile(`(?i)<\|det\|>[^<]*<\|/det\|>`)
+var detTagLeftoverPattern = regexp.MustCompile(`(?i)<\|/?det\|>`)
+var detSiblingPattern = regexp.MustCompile(`(?m)^(title|text|header|heading|caption|table|figure|page_number|paragraph)\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]\s*`)
 
 func stripReferenceTags(content string) string {
 	matches := refRegexp.FindAllStringSubmatch(content, -1)
@@ -26,6 +29,13 @@ func stripReferenceTags(content string) string {
 	}
 	content = refLeftoverRegexp.ReplaceAllString(content, "")
 	return content
+}
+
+func stripDetTags(content string) string {
+	content = detTagPattern.ReplaceAllString(content, "")
+	content = detTagLeftoverPattern.ReplaceAllString(content, "")
+	content = detSiblingPattern.ReplaceAllString(content, "")
+	return strings.TrimSpace(content)
 }
 
 func isGibberish(content string) bool {

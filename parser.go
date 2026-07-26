@@ -194,8 +194,7 @@ func parseBaiduChunkWithDet(chunk string) []OCRBlock {
 
 		blockContent = strings.TrimSpace(blockContent)
 		blockContent = stripReferenceTags(blockContent)
-		blockContent = strings.ReplaceAll(blockContent, "<|det|>", "")
-		blockContent = strings.ReplaceAll(blockContent, "<|/det|>", "")
+		blockContent = stripDetTags(blockContent)
 
 		blocks = append(blocks, OCRBlock{
 			Index:   index,
@@ -246,8 +245,7 @@ func parseBaiduSiblingFormat(chunk string) ([]OCRBlock, bool) {
 					if validBbox {
 						content := strings.TrimSpace(line[bracketEnd+1:])
 						content = stripReferenceTags(content)
-						content = strings.ReplaceAll(content, "<|det|>", "")
-						content = strings.ReplaceAll(content, "<|/det|>", "")
+						content = stripDetTags(content)
 
 						blocks = append(blocks, OCRBlock{
 							Index:   index,

@@ -46,9 +46,13 @@ func extractHybridPage(path string, index int, apiURL, model string, maxTokens i
 	var blocks []OCRBlock
 	for _, region := range regions {
 		switch region.kind {
-		case "text", "caption":
-			if text := nativeTextInRegion(chars, region.bbox, pageWidth, pageHeight); text != "" {
+		case "text", "caption", "paragraph", "page_number":
+			if text := stripDetTags(nativeTextInRegion(chars, region.bbox, pageWidth, pageHeight)); text != "" {
 				blocks = append(blocks, OCRBlock{Index: len(blocks), Label: "hybrid-text", Content: text, BBox2D: region.bbox})
+			}
+		case "title", "header", "heading":
+			if text := stripDetTags(nativeTextInRegion(chars, region.bbox, pageWidth, pageHeight)); text != "" {
+				blocks = append(blocks, OCRBlock{Index: len(blocks), Label: "hybrid-title", Content: text, BBox2D: region.bbox})
 			}
 		case "table":
 			highURI, _, renderErr := renderPDFPageToDataURI(path, index, 250)
@@ -63,7 +67,7 @@ func extractHybridPage(path string, index int, apiURL, model string, maxTokens i
 			if tableErr != nil || tableResp == nil || len(tableResp.Choices) == 0 {
 				continue
 			}
-			if table := strings.TrimSpace(tableResp.Choices[0].Message.Content); table != "" {
+			if table := stripDetTags(tableResp.Choices[0].Message.Content); table != "" {
 				blocks = append(blocks, OCRBlock{Index: len(blocks), Label: "hybrid-table", Content: table, BBox2D: region.bbox})
 			}
 		case "figure":
@@ -83,7 +87,7 @@ func hybridRegions(pages [][]OCRBlock) []hybridRegion {
 	var regions []hybridRegion
 	for _, block := range pages[0] {
 		kind := strings.ToLower(strings.TrimSpace(block.Label))
-		if kind != "text" && kind != "table" && kind != "figure" && kind != "caption" {
+		if kind != "text" && kind != "table" && kind != "figure" && kind != "caption" && kind != "title" && kind != "header" && kind != "heading" && kind != "paragraph" && kind != "page_number" {
 			continue
 		}
 		bbox, ok := getBBox(block.BBox2D)
