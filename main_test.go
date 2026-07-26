@@ -295,6 +295,57 @@ func TestNativeParagraphsJoinHyphenation(t *testing.T) {
 	}
 }
 
+func TestIsMultiColumnDetPage(t *testing.T) {
+	twoCol := []OCRBlock{
+		{Label: "text", BBox2D: []int{90, 56, 357, 87}},
+		{Label: "text", BBox2D: []int{90, 88, 357, 230}},
+		{Label: "text", BBox2D: []int{660, 453, 918, 532}}, // disjoint right column
+		{Label: "text", BBox2D: []int{660, 533, 918, 689}},
+	}
+	if !isMultiColumnDetPage(twoCol) {
+		t.Errorf("expected two-column page to be detected")
+	}
+
+	singleCol := []OCRBlock{
+		{Label: "title", BBox2D: []int{90, 56, 800, 93}},
+		{Label: "text", BBox2D: []int{90, 100, 800, 230}},
+		{Label: "text", BBox2D: []int{90, 240, 800, 400}},
+	}
+	if isMultiColumnDetPage(singleCol) {
+		t.Errorf("single-column page should not be flagged multi-column")
+	}
+
+	// Table cell bboxes are disjoint but must be ignored so genuine tables keep
+	// the table-rendering path.
+	tableOnly := []OCRBlock{
+		{Label: "table", Content: "<table><tr><td>a</td><td>b</td></tr></table>", BBox2D: []int{50, 100, 950, 300}},
+		{Label: "text", BBox2D: []int{90, 320, 800, 360}},
+	}
+	if isMultiColumnDetPage(tableOnly) {
+		t.Errorf("table blocks should not trigger multi-column detection")
+	}
+}
+
+func TestRenderMarkdown_BaiduMultiColumnKeepsReadingOrder(t *testing.T) {
+	// Two side-by-side columns must render in the model's reading order, not be
+	// fused into a table row.
+	pages := [][]OCRBlock{{
+		{Index: 0, Label: "text", Content: "Left column paragraph one.", BBox2D: []int{90, 56, 357, 87}},
+		{Index: 1, Label: "text", Content: "Left column paragraph two.", BBox2D: []int{90, 88, 357, 230}},
+		{Index: 2, Label: "title", Content: "Right Article", BBox2D: []int{394, 56, 818, 93}},
+		{Index: 3, Label: "text", Content: "Right column body.", BBox2D: []int{660, 104, 918, 230}},
+	}}
+	got := renderMarkdown(pages, false)
+	if strings.Contains(got, "| Left column") || strings.Contains(got, "--- |") {
+		t.Fatalf("columns were fused into a table:\n%s", got)
+	}
+	li := strings.Index(got, "Left column paragraph two.")
+	ri := strings.Index(got, "Right column body.")
+	if li == -1 || ri == -1 || li > ri {
+		t.Fatalf("reading order not preserved:\n%s", got)
+	}
+}
+
 func TestRenderMarkdown_HybridKeepsBaiduTableMarkdown(t *testing.T) {
 	pages := [][]OCRBlock{{
 		{Index: 0, Label: "hybrid-text", Content: "Native text above."},
