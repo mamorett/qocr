@@ -176,9 +176,23 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 				}
 				switch strings.ToLower(label) {
 				case "title":
-					fmt.Fprintf(&sb, "## %s\n\n", content)
+					h := 0
+					if len(mergedBBox) >= 4 {
+						h = mergedBBox[3] - mergedBBox[1]
+					}
+					if h > 60 {
+						fmt.Fprintf(&sb, "# %s\n\n", content)
+					} else {
+						fmt.Fprintf(&sb, "## %s\n\n", content)
+					}
 				case "figure", "caption":
 					fmt.Fprintf(&sb, "*%s*\n\n", content)
+				case "image":
+					if content != "" {
+						fmt.Fprintf(&sb, "![%s]()\n\n", content)
+					} else {
+						sb.WriteString("![Image Area]()\n\n")
+					}
 				default:
 					sb.WriteString(content + "\n\n")
 				}
@@ -216,9 +230,23 @@ func writeMarkdownBlock(sb *strings.Builder, b OCRBlock) {
 	}
 	switch strings.ToLower(b.Label) {
 	case "title":
-		fmt.Fprintf(sb, "## %s\n\n", content)
+		h := 0
+		if bbox, ok := getBBox(b.BBox2D); ok && len(bbox) >= 4 {
+			h = bbox[3] - bbox[1]
+		}
+		if h > 60 {
+			fmt.Fprintf(sb, "# %s\n\n", content)
+		} else {
+			fmt.Fprintf(sb, "## %s\n\n", content)
+		}
 	case "figure", "caption":
 		fmt.Fprintf(sb, "*%s*\n\n", content)
+	case "image":
+		if content != "" {
+			fmt.Fprintf(sb, "![%s]()\n\n", content)
+		} else {
+			sb.WriteString("![Image Area]()\n\n")
+		}
 	default:
 		sb.WriteString(content)
 		sb.WriteString("\n\n")
@@ -801,3 +829,59 @@ func cleanHTMLText(htmlStr string) string {
 	res := sb.String()
 	return strings.TrimSpace(html.UnescapeString(res))
 }
+
+func renderDetHTML(b OCRBlock, index int) string {
+	detType := strings.ToLower(b.Label)
+	text := html.EscapeString(blockContentString(b))
+	idxAttr := fmt.Sprintf(`data-detection-index="%d"`, index)
+
+	switch detType {
+	case "title":
+		h := 0
+		if bbox, ok := getBBox(b.BBox2D); ok && len(bbox) >= 4 {
+			h = bbox[3] - bbox[1]
+		}
+		level := 2
+		if h > 60 {
+			level = 1
+		}
+		tag := fmt.Sprintf("h%d", level)
+		return fmt.Sprintf("<%s class=\"ocr-heading\" contenteditable=\"true\" %s>%s</%s>", tag, idxAttr, text, tag)
+
+	case "image":
+		return fmt.Sprintf("<div class=\"ocr-image\" %s><span class=\"image-placeholder\">🖼 Image Area</span></div>", idxAttr)
+
+	case "table":
+		return fmt.Sprintf("<div class=\"ocr-table\" contenteditable=\"true\" %s>%s</div>", idxAttr, text)
+
+	case "page_number":
+		return fmt.Sprintf("<span class=\"ocr-page-number\" %s>%s</span>", idxAttr, text)
+
+	default:
+		return fmt.Sprintf("<p class=\"ocr-text\" contenteditable=\"true\" %s>%s</p>", idxAttr, text)
+	}
+}
+
+func renderHTML(pages [][]OCRBlock) string {
+	if len(pages) == 0 {
+		return `<div class="ocr-page empty"><p class="muted">No content detected</p></div>`
+	}
+
+	var parts []string
+	for pi, page := range pages {
+		pageNum := pi + 1
+		if len(page) == 0 {
+			parts = append(parts, fmt.Sprintf(`<div class="ocr-page empty" data-page="%d"><p class="muted">No content detected</p></div>`, pageNum))
+			continue
+		}
+
+		parts = append(parts, fmt.Sprintf(`<div class="ocr-page" data-page="%d">`, pageNum))
+		for i, b := range page {
+			parts = append(parts, renderDetHTML(b, i))
+		}
+		parts = append(parts, "</div>")
+	}
+
+	return strings.Join(parts, "\n")
+}
+

@@ -93,10 +93,10 @@ qocr -endpoint http://10.0.0.5:8000 document.pdf
 
 - 🚀 **Zero Dependencies**: Built with pure Go + WebAssembly. No need for `poppler`, `mupdf`, or any system-level PDF tools.
 - 📦 **Self-Contained**: PDF rendering is embedded inside the binary. Single file, works everywhere.
-- 🔌 **Multi-Engine Support**: Switch between **GLM-OCR** (default, `-engine glm`), **Baidu Unlimited-OCR** (`-engine baidu`), and the **native text-layer extractor** (`-native`) — same CLI flags, same output formats.
-- 📑 **Robust Multi-Page PDF Support**: Renders pages locally, then dispatches to the engine — sequentially for GLM-OCR, batched per request for Baidu to leverage native multi-page reasoning.
+- 🔌 **Multi-Engine Support**: Powered by **Baidu Unlimited-OCR** by default (`-engine baidu`), with support for **GLM-OCR** (`-engine glm` / `-glm`) and the built-in **native text-layer extractor** (`-native`) — same CLI flags, same output formats.
+- 📑 **Robust Multi-Page PDF Support**: Renders pages locally, then dispatches to the engine — batched per request for Baidu to leverage native multi-page reasoning, or sequentially for GLM-OCR.
 - 🔤 **Native Text Extraction**: For digitally-born PDFs, extract text, headings, and tables directly from the PDF's internal text layer with **zero inference** — offline, instant, GPU-free.
-- 🎯 **Multiple Outputs**: Get results in **Markdown**, **Plain Text**, **JSON**, or **LaTeX**.
+- 🎯 **Multiple Outputs**: Get results in **Markdown**, **HTML**, **Plain Text**, **JSON**, or **LaTeX**.
 - 🌍 **Cross-Platform**: Compiled for Linux, macOS, and Windows (AMD64 & ARM64).
 
 ---
@@ -143,21 +143,24 @@ ocr [options] <file>
 | :--- | :--- | :--- |
 | `-endpoint` | API base URL | `http://localhost:8080` |
 | `-port` | Override port in endpoint URL | `0` (uses port from endpoint) |
-| `-model` | Model name | `zai-org/GLM-OCR` (or `baidu/Unlimited-OCR` in baidu mode) |
-| `-engine` | OCR engine to use: `glm` or `baidu` | `glm` |
+| `-model` | Model name | `baidu/Unlimited-OCR` (or `zai-org/GLM-OCR` in glm mode) |
+| `-engine` | OCR engine to use: `baidu`, `glm`, `native`, or `hybrid` | `baidu` |
+| `-baidu` | Use Baidu engine (alias for `-engine baidu`) | `false` |
+| `-glm` | Use GLM engine (alias for `-engine glm`) | `false` |
 | `-native` | Extract text from PDF text layer — no OCR, no AI, no network | `false` |
-| `-prompt` | Instruction sent with the file | `Extract all text from this document` (or automatic prompt recipes in baidu mode) |
+| `-hybrid` | Use native PDF text with Baidu table OCR | `false` |
+| `-prompt` | Instruction sent with the file | Automatic prompt recipe (`<image>document parsing.` / `<image>Multi page parsing.`) |
 | `-output` | Write output to file instead of stdout | `stdout` |
 | `-dpi` | PDF rendering resolution | `200` |
 | `-resume` | Resume previous execution if interrupted | `true` |
-| `-baidu` | Use Baidu engine (alias for `-engine baidu`) | `false` |
 | `-markdown` | Output as Markdown | `true` |
+| `-html` | Output as HTML document (1:1 detection indexing with inline metadata) | `false` |
 | `-text` | Output as plain text (flattens tables) | `false` |
 | `-json` | Output as structured JSON (includes dimensions & rotation metadata) | `false` |
 | `-latex` | Output as LaTeX document fragment (tables are auto-scaled) | `false` |
 | `-bbox` | Embed normalized bounding boxes as HTML comments in markdown | `false` |
 | `-batch-size` | Number of pages per request (Baidu mode only, defaults to all pages for bounded batching) | `0` (all pages when using Baidu) |
-| `-max-tokens` | Max tokens to generate (0 means use default: unset for glm, 8192 for baidu) | `0` |
+| `-max-tokens` | Max tokens to generate (0 means use default: 8192 for baidu, unset for glm) | `0` |
 | `-raw` | Dump raw model response (debug) | `false` |
 | `-help` | Show usage information | `false` |
 | `-version` | Print version and exit | `false` |
@@ -224,6 +227,9 @@ Both the **GLM-OCR** and **Baidu Unlimited-OCR** models require images as input.
 
 ### 📝 Markdown (Default)
 Maps block labels (title, text, table, figure) to appropriate Markdown elements. Multi-page documents are separated by `---` lines and include page comments.
+
+### 🌐 HTML (`-html`)
+Converts detections directly into structured, editable HTML elements (`<h1>`, `<h2>`, `<p>`, `ocr-table`, `ocr-image`, `ocr-page-number`) with `data-detection-index` attributes for 1:1 indexing and DOM manipulation/translation.
 
 ### 📄 Plain Text (`-text`)
 Strips all Markdown decoration and flattens tables for easy copy-pasting or grep-ing.

@@ -63,7 +63,7 @@ func TestFindCachedPage(t *testing.T) {
 }
 
 func TestParseBaiduContent_SinglePage(t *testing.T) {
-	raw := "<|det|>title [14, 0, 999, 999]<|/det|>Bai du 百度"
+	raw := "<|det|>title [14, 0, 999, 999]<|/det|>Baidu"
 	pages := parseBaiduContent(raw)
 	if len(pages) != 1 {
 		t.Fatalf("expected 1 page, got %d", len(pages))
@@ -76,8 +76,8 @@ func TestParseBaiduContent_SinglePage(t *testing.T) {
 	if b.Label != "title" {
 		t.Errorf("expected label 'title', got %q", b.Label)
 	}
-	if b.Content != "Bai du 百度" {
-		t.Errorf("expected content 'Bai du 百度', got %q", b.Content)
+	if b.Content != "Baidu" {
+		t.Errorf("expected content 'Baidu', got %q", b.Content)
 	}
 	bbox, ok := getBBox(b.BBox2D)
 	if !ok || len(bbox) != 4 || bbox[0] != 14 || bbox[1] != 0 || bbox[2] != 999 || bbox[3] != 999 {
@@ -240,3 +240,73 @@ func TestRenderMarkdown_HybridKeepsBaiduTableMarkdown(t *testing.T) {
 		t.Errorf("renderMarkdown() = %q, want %q", got, want)
 	}
 }
+
+func TestRenderHTML(t *testing.T) {
+	pages := [][]OCRBlock{
+		{
+			{Index: 0, Label: "title", Content: "Main Title", BBox2D: []int{0, 0, 100, 100}}, // h = 100 - 0 = 100 (>60) -> h1
+			{Index: 1, Label: "title", Content: "Sub Title", BBox2D: []int{0, 0, 40, 40}},   // h = 40 - 0 = 40 (<=60) -> h2
+			{Index: 2, Label: "text", Content: "Hello <World>", BBox2D: []int{0, 0, 10, 10}},
+			{Index: 3, Label: "image", Content: "", BBox2D: []int{0, 0, 10, 10}},
+			{Index: 4, Label: "table", Content: "Table Content", BBox2D: []int{0, 0, 10, 10}},
+			{Index: 5, Label: "page_number", Content: "1", BBox2D: []int{0, 0, 10, 10}},
+		},
+	}
+
+	htmlOut := renderHTML(pages)
+
+	expectedSnippet1 := `<div class="ocr-page" data-page="1">`
+	expectedSnippet2 := `<h1 class="ocr-heading" contenteditable="true" data-detection-index="0">Main Title</h1>`
+	expectedSnippet3 := `<h2 class="ocr-heading" contenteditable="true" data-detection-index="1">Sub Title</h2>`
+	expectedSnippet4 := `<p class="ocr-text" contenteditable="true" data-detection-index="2">Hello &lt;World&gt;</p>`
+	expectedSnippet5 := `<div class="ocr-image" data-detection-index="3"><span class="image-placeholder">🖼 Image Area</span></div>`
+	expectedSnippet6 := `<div class="ocr-table" contenteditable="true" data-detection-index="4">Table Content</div>`
+	expectedSnippet7 := `<span class="ocr-page-number" data-detection-index="5">1</span>`
+
+	for _, snippet := range []string{expectedSnippet1, expectedSnippet2, expectedSnippet3, expectedSnippet4, expectedSnippet5, expectedSnippet6, expectedSnippet7} {
+		if !strings.Contains(htmlOut, snippet) {
+			t.Errorf("expected HTML output to contain %q, got:\n%s", snippet, htmlOut)
+		}
+	}
+}
+
+func TestRenderHTML_EmptyPages(t *testing.T) {
+	out := renderHTML([][]OCRBlock{})
+	if out != `<div class="ocr-page empty"><p class="muted">No content detected</p></div>` {
+		t.Errorf("unexpected empty output: %q", out)
+	}
+
+	outSingle := renderHTML([][]OCRBlock{{}})
+	if outSingle != `<div class="ocr-page empty" data-page="1"><p class="muted">No content detected</p></div>` {
+		t.Errorf("unexpected single empty page output: %q", outSingle)
+	}
+}
+
+func TestReconstructStructure(t *testing.T) {
+	blocks := []OCRBlock{
+		{Index: 0, Label: "title", Content: "Big Title", BBox2D: []int{0, 0, 100, 100}},
+		{Index: 1, Label: "text", Content: "First paragraph line 1"},
+		{Index: 2, Label: "text", Content: "First paragraph line 2"},
+		{Index: 3, Label: "image", Content: "Diagram"},
+		{Index: 4, Label: "text", Content: "Second paragraph"},
+	}
+
+	structured := reconstructStructure(blocks)
+	if len(structured) != 4 {
+		t.Fatalf("expected 4 structured blocks, got %d", len(structured))
+	}
+
+	if structured[0].BlockType != "heading" || structured[0].Level != 1 || structured[0].Text != "Big Title" {
+		t.Errorf("unexpected block 0: %#v", structured[0])
+	}
+	if structured[1].BlockType != "paragraph" || structured[1].Text != "First paragraph line 1\nFirst paragraph line 2" {
+		t.Errorf("unexpected block 1: %#v", structured[1])
+	}
+	if structured[2].BlockType != "image" || structured[2].Text != "Diagram" {
+		t.Errorf("unexpected block 2: %#v", structured[2])
+	}
+	if structured[3].BlockType != "paragraph" || structured[3].Text != "Second paragraph" {
+		t.Errorf("unexpected block 3: %#v", structured[3])
+	}
+}
+

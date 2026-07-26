@@ -17,21 +17,23 @@ func run(args []string) error {
 
 	endpoint := fs.String("endpoint", "http://localhost:8080", "API base URL")
 	port := fs.Int("port", 0, "Override port in --endpoint")
-	model := fs.String("model", "zai-org/GLM-OCR", "Model name")
+	model := fs.String("model", "baidu/Unlimited-OCR", "Model name")
 	prompt := fs.String("prompt", defaultPrompt, "Instruction sent with the file")
 	outputFile := fs.String("output", "", "Write output to file instead of stdout")
 	_ = fs.Bool("markdown", false, "Output as Markdown (default)")
 	fmtText := fs.Bool("text", false, "Output as plain text")
 	fmtJSON := fs.Bool("json", false, "Output as JSON")
 	fmtLatex := fs.Bool("latex", false, "Output as LaTeX document")
+	fmtHTML := fs.Bool("html", false, "Output as HTML document")
 	showBBox := fs.Bool("bbox", false, "Embed normalized bounding boxes as HTML comments in markdown output")
 	rawMode := fs.Bool("raw", false, "Dump raw model response and exit (debug)")
 	showHelp := fs.Bool("help", false, "Show usage information")
 	showVer := fs.Bool("version", false, "Print version and exit")
 	dpi := fs.Int("dpi", 200, "Rendering resolution for PDF pages")
 	resume := fs.Bool("resume", true, "Resume previous execution if interrupted")
-	engine := fs.String("engine", "glm", "OCR engine: glm, baidu, or hybrid (native text + Baidu table OCR)")
+	engine := fs.String("engine", "baidu", "OCR engine: baidu, glm, native, or hybrid (native text + Baidu table OCR)")
 	baidu := fs.Bool("baidu", false, "Use Baidu engine (alias for -engine baidu)")
+	glm := fs.Bool("glm", false, "Use GLM engine (alias for -engine glm)")
 	native := fs.Bool("native", false, "Extract text directly from PDF text layer (no OCR, no AI, no network)")
 	hybrid := fs.Bool("hybrid", false, "Use native PDF text with Baidu layout/table OCR for complex regions")
 	maxTokens := fs.Int("max-tokens", 0, "Max tokens to generate (0 means use default: unset for glm, 8192 for baidu)")
@@ -44,7 +46,8 @@ func run(args []string) error {
 		fmt.Fprintln(os.Stderr, `
 Examples:
   qocr scan.png
-  qocr -baidu scan.png
+  qocr -html -output result.html scan.png
+  qocr -glm scan.png
   qocr -native document.pdf -output result.md
   qocr -output result.md document.pdf
   qocr document.pdf -output result.md
@@ -100,6 +103,9 @@ Examples:
 	if *baidu {
 		eng = EngineBaidu
 	}
+	if *glm {
+		eng = EngineGLM
+	}
 	if *native {
 		eng = EngineNative
 	}
@@ -109,6 +115,10 @@ Examples:
 	if eng == EngineBaidu || eng == EngineHybrid {
 		if *model == "zai-org/GLM-OCR" {
 			*model = "baidu/Unlimited-OCR"
+		}
+	} else if eng == EngineGLM {
+		if *model == "baidu/Unlimited-OCR" {
+			*model = "zai-org/GLM-OCR"
 		}
 	}
 
@@ -530,6 +540,8 @@ Examples:
 		if err != nil {
 			return fmt.Errorf("encoding LaTeX: %w", err)
 		}
+	case *fmtHTML:
+		result = renderHTML(allPages)
 	default:
 		result = renderMarkdown(allPages, *showBBox)
 	}

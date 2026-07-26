@@ -111,3 +111,11 @@ type ResumeState struct {
 	RawDocument string      `json:"raw_document,omitempty"`
 	PageDims    []PageDim   `json:"page_dims,omitempty"`
 }
+
+type StructuredBlock struct {
+	BlockType string      `json:"block_type"`
+	Level     int         `json:"level,omitempty"`
+	Text      string      `json:"text"`
+	BBox      interface{} `json:"bbox,omitempty"`
+}
+
