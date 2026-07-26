@@ -8,7 +8,43 @@ import (
 	"strings"
 )
 
-var cjkRegexp = regexp.MustCompile(`\p{Han}`)
+var (
+	cjkRegexp = regexp.MustCompile(`\p{Han}`)
+
+	latexUnicodeReplacer = strings.NewReplacer(
+		"。", ".", "，", ", ", "（", "(", "）", ")", "；", ";", "：", ":", "？", "?", "！", "!",
+		"“", "\"", "”", "\"", "‘", "'", "’", "'", "○", "0", "□", "\\(\\square\\)", "•", "\\(\\bullet\\)",
+		"π", "\\(\\pi\\)", "α", "\\(\\alpha\\)", "β", "\\(\\beta\\)", "λ", "\\(\\lambda\\)", "θ", "\\(\\theta\\)", "√", "\\(\\surd\\)",
+		"⁰", "\\(^{0}\\)", "¹", "\\(^{1}\\)", "²", "\\(^{2}\\)", "³", "\\(^{3}\\)", "⁴", "\\(^{4}\\)",
+		"⁵", "\\(^{5}\\)", "⁶", "\\(^{6}\\)", "⁷", "\\(^{7}\\)", "⁸", "\\(^{8}\\)", "⁹", "\\(^{9}\\)",
+		"↔", "\\(\\leftrightarrow\\)", "→", "\\(\\rightarrow\\)", "←", "\\(\\leftarrow\\)",
+		"Ø", "\\O ", "ø", "\\o ", "∅", "\\O ", "Æ", "\\AE ", "æ", "\\ae ", "Å", "\\AA ", "å", "\\aa ",
+	)
+
+	latexEscapeReplacer = strings.NewReplacer(
+		"\\", "\\textbackslash ",
+		"%", "\\%",
+		"&", "\\&",
+		"$", "\\$",
+		"_", "\\_",
+		"{", "\\{",
+		"}", "\\}",
+		"#", "\\#",
+		"~", "\\textasciitilde ",
+		"^", "\\textasciicircum ",
+		"<", "\\textless ",
+		">", "\\textgreater ",
+	)
+
+	plainTextReplacer = strings.NewReplacer(
+		"**", "", "__", "", "```", "", "`", "", "*", "", "_", "",
+	)
+
+	htmlBrReplacer = strings.NewReplacer(
+		"<br>", " ", "<br/>", " ", "<br />", " ",
+		"<BR>", " ", "<BR/>", " ", "<BR />", " ",
+	)
+)
 
 func blockContentString(b OCRBlock) string {
 	switch v := b.Content.(type) {
@@ -87,7 +123,9 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 					if isEmptyRow {
 						continue
 					}
-					sb.WriteString("| " + strings.Join(cleanRow, " | ") + " |\n")
+					sb.WriteString("| ")
+					sb.WriteString(strings.Join(cleanRow, " | "))
+					sb.WriteString(" |\n")
 					if idx == 0 {
 						sb.WriteString("|")
 						for c := 0; c < maxCols; c++ {
@@ -100,7 +138,8 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 			} else {
 				for _, r := range tableRows {
 					if len(r) > 0 {
-						sb.WriteString(r[0] + "\n\n")
+						sb.WriteString(r[0])
+						sb.WriteString("\n\n")
 					}
 				}
 			}
@@ -119,7 +158,8 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 				}
 				if strings.Contains(strings.ToLower(content), "<table") {
 					if table := htmlTableToMarkdown(content); table != "" {
-						sb.WriteString(table + "\n\n")
+						sb.WriteString(table)
+						sb.WriteString("\n\n")
 					}
 					continue
 				}
@@ -149,8 +189,9 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 					continue
 				}
 
+				lbl := strings.ToLower(label)
 				shouldFlush := false
-				if strings.ToLower(label) == "title" || strings.ToLower(label) == "header" || strings.ToLower(label) == "caption" || strings.ToLower(label) == "figure" {
+				if lbl == "title" || lbl == "header" || lbl == "caption" || lbl == "figure" {
 					shouldFlush = true
 				} else if len(content) > 40 {
 					shouldFlush = true
@@ -163,7 +204,7 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 				if showBBox && len(mergedBBox) == 4 {
 					fmt.Fprintf(&sb, "<!-- bbox: %v -->\n", mergedBBox)
 				}
-				switch strings.ToLower(label) {
+				switch lbl {
 				case "title":
 					h := 0
 					if len(mergedBBox) >= 4 {
@@ -183,7 +224,8 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 						sb.WriteString("![Image Area]()\n\n")
 					}
 				default:
-					sb.WriteString(content + "\n\n")
+					sb.WriteString(content)
+					sb.WriteString("\n\n")
 				}
 			} else {
 				var cells []string
@@ -222,7 +264,8 @@ func writeMarkdownBlock(sb *strings.Builder, b OCRBlock, showBBox bool) {
 		}
 		return
 	}
-	switch strings.ToLower(b.Label) {
+	lbl := strings.ToLower(b.Label)
+	switch lbl {
 	case "title":
 		h := 0
 		if bbox, ok := getBBox(b.BBox2D); ok && len(bbox) >= 4 {
@@ -272,9 +315,6 @@ func tableRowToPlain(line string) string {
 
 func renderPlainText(pages [][]OCRBlock) string {
 	md := renderMarkdown(pages, false)
-	replacer := strings.NewReplacer(
-		"**", "", "__", "", "```", "", "`", "", "*", "", "_", "",
-	)
 	var out []string
 	for _, line := range strings.Split(md, "\n") {
 		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "<!--") {
@@ -287,7 +327,7 @@ func renderPlainText(pages [][]OCRBlock) string {
 		if strings.Contains(stripped, "|") {
 			stripped = tableRowToPlain(stripped)
 		}
-		out = append(out, replacer.Replace(stripped))
+		out = append(out, plainTextReplacer.Replace(stripped))
 	}
 	result := strings.Join(out, "\n")
 	for strings.Contains(result, "\n\n\n") {
@@ -332,74 +372,12 @@ func renderJSON(pages [][]OCRBlock, source, model string, pageDims []PageDim) (s
 }
 
 func cleanUnicodeForLatex(s string) string {
-	// Map common CJK/unicode punctuation to standard LaTeX/ASCII equivalents
-	s = strings.ReplaceAll(s, "。", ".")
-	s = strings.ReplaceAll(s, "，", ", ")
-	s = strings.ReplaceAll(s, "（", "(")
-	s = strings.ReplaceAll(s, "）", ")")
-	s = strings.ReplaceAll(s, "；", ";")
-	s = strings.ReplaceAll(s, "：", ":")
-	s = strings.ReplaceAll(s, "？", "?")
-	s = strings.ReplaceAll(s, "！", "!")
-	s = strings.ReplaceAll(s, "“", "\"")
-	s = strings.ReplaceAll(s, "”", "\"")
-	s = strings.ReplaceAll(s, "‘", "'")
-	s = strings.ReplaceAll(s, "’", "'")
-	s = strings.ReplaceAll(s, "○", "0")
-	s = strings.ReplaceAll(s, "□", "\\(\\square\\)")
-	s = strings.ReplaceAll(s, "•", "\\(\\bullet\\)")
-	s = strings.ReplaceAll(s, "π", "\\(\\pi\\)")
-	s = strings.ReplaceAll(s, "α", "\\(\\alpha\\)")
-	s = strings.ReplaceAll(s, "β", "\\(\\beta\\)")
-	s = strings.ReplaceAll(s, "λ", "\\(\\lambda\\)")
-	s = strings.ReplaceAll(s, "θ", "\\(\\theta\\)")
-	s = strings.ReplaceAll(s, "√", "\\(\\surd\\)")
-
-	// Map superscript digits to LaTeX math superscripts
-	s = strings.ReplaceAll(s, "⁰", "\\(^{0}\\)")
-	s = strings.ReplaceAll(s, "¹", "\\(^{1}\\)")
-	s = strings.ReplaceAll(s, "²", "\\(^{2}\\)")
-	s = strings.ReplaceAll(s, "³", "\\(^{3}\\)")
-	s = strings.ReplaceAll(s, "⁴", "\\(^{4}\\)")
-	s = strings.ReplaceAll(s, "⁵", "\\(^{5}\\)")
-	s = strings.ReplaceAll(s, "⁶", "\\(^{6}\\)")
-	s = strings.ReplaceAll(s, "⁷", "\\(^{7}\\)")
-	s = strings.ReplaceAll(s, "⁸", "\\(^{8}\\)")
-	s = strings.ReplaceAll(s, "⁹", "\\(^{9}\\)")
-
-	// Map common math/arrow symbols
-	s = strings.ReplaceAll(s, "↔", "\\(\\leftrightarrow\\)")
-	s = strings.ReplaceAll(s, "→", "\\(\\rightarrow\\)")
-	s = strings.ReplaceAll(s, "←", "\\(\\leftarrow\\)")
-
-	// Map Scandinavian characters and empty-set symbols
-	s = strings.ReplaceAll(s, "Ø", "\\O ")
-	s = strings.ReplaceAll(s, "ø", "\\o ")
-	s = strings.ReplaceAll(s, "∅", "\\O ")
-	s = strings.ReplaceAll(s, "Æ", "\\AE ")
-	s = strings.ReplaceAll(s, "æ", "\\ae ")
-	s = strings.ReplaceAll(s, "Å", "\\AA ")
-	s = strings.ReplaceAll(s, "å", "\\aa ")
-
-	// Strip Chinese (Han) characters
-	s = cjkRegexp.ReplaceAllString(s, "")
-	return s
+	s = latexUnicodeReplacer.Replace(s)
+	return cjkRegexp.ReplaceAllString(s, "")
 }
 
 func escapeLatex(s string) string {
-	s = strings.ReplaceAll(s, "\\", "\\textbackslash ")
-	s = strings.ReplaceAll(s, "%", "\\%")
-	s = strings.ReplaceAll(s, "&", "\\&")
-	s = strings.ReplaceAll(s, "$", "\\$")
-	s = strings.ReplaceAll(s, "_", "\\_")
-	s = strings.ReplaceAll(s, "{", "\\{")
-	s = strings.ReplaceAll(s, "}", "\\}")
-	s = strings.ReplaceAll(s, "#", "\\#")
-	s = strings.ReplaceAll(s, "~", "\\textasciitilde ")
-	s = strings.ReplaceAll(s, "^", "\\textasciicircum ")
-	s = strings.ReplaceAll(s, "<", "\\textless ")
-	s = strings.ReplaceAll(s, ">", "\\textgreater ")
-	return s
+	return latexEscapeReplacer.Replace(s)
 }
 
 func escapeLatexWithMath(s string) string {
@@ -412,10 +390,13 @@ func escapeLatexWithMath(s string) string {
 		} else {
 			subparts := strings.SplitN(part, "\\)", 2)
 			if len(subparts) == 2 {
-				sb.WriteString("\\(" + subparts[0] + "\\)")
+				sb.WriteString("\\(")
+				sb.WriteString(subparts[0])
+				sb.WriteString("\\)")
 				sb.WriteString(escapeLatex(subparts[1]))
 			} else {
-				sb.WriteString(escapeLatex("\\(" + part))
+				sb.WriteString("\\(")
+				sb.WriteString(escapeLatex(part))
 			}
 		}
 	}
@@ -500,18 +481,16 @@ func htmlTableToLatex(htmlStr string) string {
 
 	var sb strings.Builder
 	sb.WriteString("\\begin{table}[h]\n\\centering\n")
-	alignStr := ""
-	for c := 0; c < maxCols; c++ {
-		alignStr += "l "
-	}
 	sb.WriteString("\\sbox{\\tblbox}{%\n")
 	sb.WriteString("\\small\n")
+	alignStr := strings.Repeat("l ", maxCols)
 	fmt.Fprintf(&sb, "\\begin{tabular}{%s}\n\\hline\n", strings.TrimSpace(alignStr))
 	for idx, row := range latexRows {
 		for len(row) < maxCols {
 			row = append(row, "")
 		}
-		sb.WriteString(strings.Join(row, " & ") + " \\\\ \\relax\n")
+		sb.WriteString(strings.Join(row, " & "))
+		sb.WriteString(" \\\\ \\relax\n")
 		if idx == 0 {
 			sb.WriteString("\\hline\n")
 		}
@@ -556,7 +535,8 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 			for _, b := range cleanPage {
 				content := strings.TrimSpace(blockContentString(b))
 				if content != "" {
-					sb.WriteString(escapeLatexWithMath(content) + "\n\n")
+					sb.WriteString(escapeLatexWithMath(content))
+					sb.WriteString("\n\n")
 				}
 			}
 			continue
@@ -576,12 +556,9 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 			}
 			if maxCols > 1 {
 				sb.WriteString("\\begin{table}[h]\n\\centering\n")
-				alignStr := ""
-				for c := 0; c < maxCols; c++ {
-					alignStr += "l "
-				}
 				sb.WriteString("\\sbox{\\tblbox}{%\n")
 				sb.WriteString("\\small\n")
+				alignStr := strings.Repeat("l ", maxCols)
 				fmt.Fprintf(&sb, "\\begin{tabular}{%s}\n\\hline\n", strings.TrimSpace(alignStr))
 
 				for idx, r := range tableRows {
@@ -610,7 +587,8 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 						continue
 					}
 
-					sb.WriteString(strings.Join(cleanRow, " & ") + " \\\\ \\relax\n")
+					sb.WriteString(strings.Join(cleanRow, " & "))
+					sb.WriteString(" \\\\ \\relax\n")
 					if idx == 0 {
 						sb.WriteString("\\hline\n")
 					}
@@ -625,7 +603,8 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 			} else {
 				for _, r := range tableRows {
 					if len(r) > 0 {
-						sb.WriteString(escapeLatexWithMath(r[0]) + "\n\n")
+						sb.WriteString(escapeLatexWithMath(r[0]))
+						sb.WriteString("\n\n")
 					}
 				}
 			}
@@ -643,7 +622,8 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 					continue
 				}
 				if strings.Contains(strings.ToLower(content), "<table") {
-					sb.WriteString(htmlTableToLatex(content) + "\n\n")
+					sb.WriteString(htmlTableToLatex(content))
+					sb.WriteString("\n\n")
 					continue
 				}
 				label := row[0].Label
@@ -672,8 +652,9 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 					continue
 				}
 
+				lbl := strings.ToLower(label)
 				shouldFlush := false
-				if strings.ToLower(label) == "title" || strings.ToLower(label) == "header" || strings.ToLower(label) == "caption" || strings.ToLower(label) == "figure" {
+				if lbl == "title" || lbl == "header" || lbl == "caption" || lbl == "figure" {
 					shouldFlush = true
 				} else if len(content) > 40 {
 					shouldFlush = true
@@ -683,7 +664,7 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 				if shouldFlush {
 					flushTable()
 				}
-				switch strings.ToLower(label) {
+				switch lbl {
 				case "title":
 					fmt.Fprintf(&sb, "\\section{%s}\n\n", escapeLatexWithMath(content))
 				case "header":
@@ -691,7 +672,8 @@ func renderLatex(pages [][]OCRBlock, source, model string) (string, error) {
 				case "figure", "caption":
 					fmt.Fprintf(&sb, "\\begin{figure}[h]\n\\centering\n\\caption{%s}\n\\end{figure}\n\n", escapeLatexWithMath(content))
 				default:
-					sb.WriteString(escapeLatexWithMath(content) + "\n\n")
+					sb.WriteString(escapeLatexWithMath(content))
+					sb.WriteString("\n\n")
 				}
 			} else {
 				var cells []string
@@ -803,15 +785,10 @@ func escapeMarkdownTableCell(cell string) string {
 }
 
 func cleanHTMLText(htmlStr string) string {
-	htmlStr = strings.NewReplacer(
-		"<br>", " ", "<br/>", " ", "<br />", " ",
-		"<BR>", " ", "<BR/>", " ", "<BR />", " ",
-	).Replace(htmlStr)
+	htmlStr = htmlBrReplacer.Replace(htmlStr)
 	var sb strings.Builder
 	inTag := false
-	runes := []rune(htmlStr)
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
+	for _, r := range htmlStr {
 		if r == '<' {
 			inTag = true
 		} else if r == '>' {
@@ -878,4 +855,3 @@ func renderHTML(pages [][]OCRBlock) string {
 
 	return strings.Join(parts, "\n")
 }
-
