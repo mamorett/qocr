@@ -9,20 +9,6 @@ import (
 )
 
 var cjkRegexp = regexp.MustCompile(`\p{Han}`)
-var nonASCIIRegexp = regexp.MustCompile(`[^\x00-\x7F]+`)
-
-func sanitizeLabel(l string) string {
-	l = strings.ToLower(l)
-	var sb strings.Builder
-	for _, r := range l {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			sb.WriteRune(r)
-		} else {
-			sb.WriteRune('-')
-		}
-	}
-	return sb.String()
-}
 
 func blockContentString(b OCRBlock) string {
 	switch v := b.Content.(type) {
@@ -55,7 +41,7 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 		}
 		if isHybridLayoutPage(cleanPage) {
 			for _, b := range cleanPage {
-				writeMarkdownBlock(&sb, b)
+				writeMarkdownBlock(&sb, b, showBBox)
 			}
 			continue
 		}
@@ -63,7 +49,7 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 		rows := groupBlocksIntoRows(cleanPage)
 		if len(rows) == 0 {
 			for _, b := range cleanPage {
-				writeMarkdownBlock(&sb, b)
+				writeMarkdownBlock(&sb, b, showBBox)
 			}
 			continue
 		}
@@ -174,6 +160,9 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 				if shouldFlush {
 					flushTable()
 				}
+				if showBBox && len(mergedBBox) == 4 {
+					fmt.Fprintf(&sb, "<!-- bbox: %v -->\n", mergedBBox)
+				}
 				switch strings.ToLower(label) {
 				case "title":
 					h := 0
@@ -213,10 +202,15 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 // writeMarkdownBlock renders a block when no spatial metadata is available.
 // Native PDF extraction intentionally takes this path, so table blocks must be
 // converted here rather than being copied as raw HTML.
-func writeMarkdownBlock(sb *strings.Builder, b OCRBlock) {
+func writeMarkdownBlock(sb *strings.Builder, b OCRBlock, showBBox bool) {
 	content := strings.TrimSpace(blockContentString(b))
 	if content == "" {
 		return
+	}
+	if showBBox {
+		if bbox, ok := getBBox(b.BBox2D); ok {
+			fmt.Fprintf(sb, "<!-- bbox: %v -->\n", bbox)
+		}
 	}
 	if strings.EqualFold(b.Label, "table") || strings.EqualFold(b.Label, "hybrid-table") || strings.Contains(strings.ToLower(content), "<table") {
 		if table := htmlTableToMarkdown(content); table != "" {

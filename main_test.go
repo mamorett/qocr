@@ -209,6 +209,15 @@ func TestRenderMarkdown_NativeTableDoesNotLeakHTML(t *testing.T) {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
 	}
 }
+func TestRenderMarkdown_ShowBBox(t *testing.T) {
+	pages := [][]OCRBlock{{
+		{Index: 0, Label: "text", Content: "Sample paragraph", BBox2D: []int{10, 20, 30, 40}},
+	}}
+	result := renderMarkdown(pages, true)
+	if !strings.Contains(result, "<!-- bbox: [10 20 30 40] -->") {
+		t.Errorf("expected output to contain bounding box comment, got:\n%s", result)
+	}
+}
 
 func TestNormalizeNativeText(t *testing.T) {
 	input := "\r\nA\u00a0B\r\nC\r\x00"
