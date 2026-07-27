@@ -14,6 +14,7 @@ const (
 	EngineBaidu  Engine = "baidu"
 	EngineNative Engine = "native"
 	EngineHybrid Engine = "hybrid"
+	EngineEPUB   Engine = "epub"
 )
 
 type ImageURL struct {

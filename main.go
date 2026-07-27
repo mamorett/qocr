@@ -38,6 +38,7 @@ func run(args []string) error {
 	baidu := fs.Bool("baidu", false, "Use Baidu engine (alias for -engine baidu)")
 	glm := fs.Bool("glm", false, "Use GLM engine (alias for -engine glm)")
 	native := fs.Bool("native", false, "Extract text directly from PDF text layer (no OCR, no AI, no network)")
+	epubFlag := fs.Bool("epub", false, "Extract text from EPUB (auto-detected by extension; no OCR, no AI, no network)")
 	hybrid := fs.Bool("hybrid", false, "Use native PDF text with Baidu layout/table OCR for complex regions")
 	maxTokens := fs.Int("max-tokens", 0, "Max tokens to generate (0 means use default: unset for glm, 8192 for baidu)")
 	batchSize := fs.Int("batch-size", 0, "Number of pages per request for baidu (0 means all in one request)")
@@ -62,11 +63,12 @@ func run(args []string) error {
 			{
 				title: "ENGINE & OCR OPTIONS",
 				flags: []flagDoc{
-					{"-engine <name>", "OCR engine: baidu, glm, native, or hybrid (default \"baidu\")"},
+					{"-engine <name>", "OCR engine: baidu, glm, native, hybrid, or epub (default \"baidu\")"},
 					{"-baidu", "Use Baidu engine (alias for -engine baidu)"},
 					{"-glm", "Use GLM engine (alias for -engine glm)"},
 					{"-native", "Extract text directly from PDF text layer (offline, zero AI/GPU)"},
-					{"-hybrid", "Use native PDF text with Baidu table OCR for complex regions"},
+					{"-hybrid", "Use native PDF text with Baidu table/layout OCR for complex regions"},
+					{"-epub", "Extract text from an EPUB file (auto-detected; offline, zero AI/GPU)"},
 					{"-model <name>", "Model name ID (default \"baidu/Unlimited-OCR\")"},
 					{"-prompt <text>", "Instruction prompt sent with document"},
 					{"-dpi <int>", "Rendering resolution for PDF pages (default 200)"},
@@ -120,6 +122,7 @@ func run(args []string) error {
 			{"Basic usage: extract text from image or PDF to stdout/markdown", "qocr scan.png"},
 			{"Save Markdown output to a file", "qocr -output result.md document.pdf"},
 			{"Fast offline extraction from digital PDFs (no GPU, no network required)", "qocr -native document.pdf -output result.md"},
+			{"Convert an EPUB book to Markdown (no AI, no network, auto-detected)", "qocr book.epub -output book.md"},
 			{"GLM-OCR engine with custom local vLLM endpoint", "qocr -glm -endpoint http://localhost:8000 scan.jpg"},
 			{"Baidu Unlimited-OCR model with specific server endpoint", "qocr -engine baidu -model baidu/Unlimited-OCR -endpoint http://10.0.0.5:8000 paper.pdf"},
 			{"Hybrid mode: native PDF text + Baidu table/layout OCR", "qocr -hybrid contract.pdf -output contract.md"},
@@ -193,6 +196,9 @@ func run(args []string) error {
 	if *hybrid {
 		eng = EngineHybrid
 	}
+	if *epubFlag {
+		eng = EngineEPUB
+	}
 	if eng == EngineBaidu || eng == EngineHybrid {
 		if *model == "zai-org/GLM-OCR" {
 			*model = "baidu/Unlimited-OCR"
@@ -213,8 +219,24 @@ func run(args []string) error {
 	apiURL := base + "/v1/chat/completions"
 
 	var totalPages int
+	isEPUB := strings.ToLower(filepath.Ext(inputFile)) == ".epub"
 	isPDF := strings.ToLower(filepath.Ext(inputFile)) == ".pdf"
-	if isPDF {
+
+	// Auto-detect EPUB: override engine to EngineEPUB and warn if user requested AI.
+	if isEPUB {
+		if eng != EngineNative && eng != EngineEPUB {
+			fmt.Fprintf(os.Stderr, "  %s Input is an EPUB file — AI engine %q is not applicable. Switching to native EPUB extraction.\n", color(colorYellow, "⚠️"), string(eng))
+		}
+		eng = EngineEPUB
+	}
+
+	if isEPUB {
+		var err error
+		totalPages, err = getEPUBChapterCount(inputFile)
+		if err != nil {
+			return err
+		}
+	} else if isPDF {
 		var err error
 		totalPages, err = getPDFPageCount(inputFile)
 		if err != nil {
@@ -267,9 +289,13 @@ func run(args []string) error {
 	fmt.Fprintf(os.Stderr, "  %s\n", color(colorBold+colorCyan, "QOCR CLIENT — DOCUMENT DIGITIZATION"))
 	fmt.Fprintf(os.Stderr, "%s\n", color(colorDim, "─────────────────────────────────────────────────────────────────"))
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Input file:", color(colorWhite, inputFile))
-	fmt.Fprintf(os.Stderr, "  %s %-15s %d page(s)\n", color(colorBold+colorCyan, "•"), "Pages:", totalPages)
+	if isEPUB {
+		fmt.Fprintf(os.Stderr, "  %s %-15s %d chapter(s)\n", color(colorBold+colorCyan, "•"), "Chapters:", totalPages)
+	} else {
+		fmt.Fprintf(os.Stderr, "  %s %-15s %d page(s)\n", color(colorBold+colorCyan, "•"), "Pages:", totalPages)
+	}
 	fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Engine:", color(colorWhite, string(eng)))
-	if eng == EngineNative {
+	if eng == EngineNative || eng == EngineEPUB {
 		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Model:", color(colorDim, "N/A (text layer)"))
 		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", color(colorBold+colorCyan, "•"), "Endpoint:", color(colorDim, "N/A (offline)"))
 	} else {
@@ -306,7 +332,47 @@ func run(args []string) error {
 	var pageDims []PageDim
 	startTime := time.Now()
 
-	if eng == EngineNative {
+	if eng == EngineEPUB {
+		// ── EPUB extraction (no OCR, no network) ─────────────────────────────
+		pageDims = make([]PageDim, totalPages)
+		ocrStartTime := time.Now()
+		drawProgressBar(0, totalPages, ocrStartTime, "extracting chapters...")
+		for i := 0; i < totalPages; i++ {
+			var blocks []OCRBlock
+			var found bool
+
+			if *resume && resumeState != nil {
+				var content string
+				content, found = findCachedPage(resumeState, i)
+				if found && i < len(resumeState.PageDims) {
+					pageDims[i] = resumeState.PageDims[i]
+					pages, _ := parseOCRContent(content)
+					if len(pages) > 0 {
+						blocks = pages[0]
+					}
+				}
+			}
+
+			if found {
+				drawProgressBar(i+1, totalPages, ocrStartTime, "restored from cache")
+			} else {
+				drawProgressBar(i, totalPages, ocrStartTime, fmt.Sprintf("extracting chapter %d...", i+1))
+				var dim PageDim
+				var err error
+				blocks, dim, err = extractEPUBChapter(inputFile, i)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\n")
+					return fmt.Errorf("EPUB chapter %d: %w", i+1, err)
+				}
+				pageDims[i] = dim
+				drawProgressBar(i+1, totalPages, ocrStartTime, "")
+			}
+
+			allPages = append(allPages, blocks)
+		}
+		fmt.Fprintln(os.Stderr)
+
+	} else if eng == EngineNative {
 		// ── Native text-layer extraction (no OCR, no network) ────────────────
 		if !isPDF {
 			return fmt.Errorf("the -native flag requires a PDF input file (got %q)", inputFile)

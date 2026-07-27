@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"os"
 	"strings"
 	"testing"
 )
@@ -427,3 +429,201 @@ func TestReconstructStructure(t *testing.T) {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EPUB tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestXhtmlToBlocks(t *testing.T) {
+	xhtml := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Test Chapter</title></head>
+<body>
+  <h1>Chapter One</h1>
+  <h3>A Section</h3>
+  <p>Hello world paragraph.</p>
+  <table><tr><th>Name</th><th>Value</th></tr><tr><td>Foo</td><td>Bar</td></tr></table>
+  <figure>
+    <img src="image.png" alt="A diagram"/>
+    <figcaption>Figure caption here</figcaption>
+  </figure>
+  <img src="standalone.png" alt="Standalone image"/>
+</body>
+</html>`
+
+	blocks, err := xhtmlToBlocks(strings.NewReader(xhtml))
+	if err != nil {
+		t.Fatalf("xhtmlToBlocks error: %v", err)
+	}
+
+	type got struct{ label, content string }
+	var results []got
+	for _, b := range blocks {
+		s, _ := b.Content.(string)
+		results = append(results, got{b.Label, s})
+	}
+
+	checks := []struct {
+		label    string
+		contains string
+	}{
+		{"title", "Chapter One"},
+		{"header", "A Section"},
+		{"text", "Hello world paragraph."},
+		{"table", "<table>"},
+		{"image", "A diagram"},
+		{"caption", "Figure caption here"},
+		{"image", "Standalone image"},
+	}
+
+	if len(results) < len(checks) {
+		t.Fatalf("expected at least %d blocks, got %d: %v", len(checks), len(results), results)
+	}
+	for i, c := range checks {
+		if results[i].label != c.label {
+			t.Errorf("block[%d] label: want %q, got %q", i, c.label, results[i].label)
+		}
+		if !strings.Contains(results[i].content, c.contains) {
+			t.Errorf("block[%d] content: want contains %q, got %q", i, c.contains, results[i].content)
+		}
+	}
+}
+
+func TestXhtmlToBlocks_SkipsNav(t *testing.T) {
+	xhtml := `<html><body>
+<nav><p>Navigation content</p></nav>
+<p>Real paragraph.</p>
+</body></html>`
+
+	blocks, err := xhtmlToBlocks(strings.NewReader(xhtml))
+	if err != nil {
+		t.Fatalf("xhtmlToBlocks error: %v", err)
+	}
+	for _, b := range blocks {
+		if s, _ := b.Content.(string); strings.Contains(s, "Navigation") {
+			t.Errorf("nav content should be skipped, got block: %+v", b)
+		}
+	}
+	if len(blocks) != 1 {
+		t.Errorf("expected 1 block (real paragraph), got %d", len(blocks))
+	}
+}
+
+func makeMinimalEPUB(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	epubPath := dir + "/test.epub"
+
+	f, err := os.Create(epubPath)
+	if err != nil {
+		t.Fatalf("creating temp epub: %v", err)
+	}
+	defer f.Close()
+
+	w := zip.NewWriter(f)
+
+	writeZipEntry(t, w, "mimetype", "application/epub+zip")
+	writeZipEntry(t, w, "META-INF/container.xml", `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`)
+	writeZipEntry(t, w, "OEBPS/content.opf", `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata/>
+  <manifest>
+    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="chapter2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chapter1"/>
+    <itemref idref="chapter2"/>
+  </spine>
+</package>`)
+	writeZipEntry(t, w, "OEBPS/chapter1.xhtml", `<?xml version="1.0"?>
+<html><body><h1>First Chapter</h1><p>Hello from chapter one.</p></body></html>`)
+	writeZipEntry(t, w, "OEBPS/chapter2.xhtml", `<?xml version="1.0"?>
+<html><body><h2>Second Chapter</h2><p>Hello from chapter two.</p></body></html>`)
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing epub zip: %v", err)
+	}
+	return epubPath
+}
+
+func writeZipEntry(t *testing.T, w *zip.Writer, name, content string) {
+	t.Helper()
+	fw, err := w.Create(name)
+	if err != nil {
+		t.Fatalf("zip create %q: %v", name, err)
+	}
+	if _, err := fw.Write([]byte(content)); err != nil {
+		t.Fatalf("zip write %q: %v", name, err)
+	}
+}
+
+func TestParseEPUBSpine(t *testing.T) {
+	epubPath := makeMinimalEPUB(t)
+	spine, err := parseEPUBSpine(epubPath)
+	if err != nil {
+		t.Fatalf("parseEPUBSpine: %v", err)
+	}
+	if len(spine) != 2 {
+		t.Fatalf("expected 2 spine items, got %d: %v", len(spine), spine)
+	}
+	if spine[0] != "OEBPS/chapter1.xhtml" {
+		t.Errorf("spine[0]: want OEBPS/chapter1.xhtml, got %q", spine[0])
+	}
+	if spine[1] != "OEBPS/chapter2.xhtml" {
+		t.Errorf("spine[1]: want OEBPS/chapter2.xhtml, got %q", spine[1])
+	}
+}
+
+func TestGetEPUBChapterCount(t *testing.T) {
+	epubPath := makeMinimalEPUB(t)
+	count, err := getEPUBChapterCount(epubPath)
+	if err != nil {
+		t.Fatalf("getEPUBChapterCount: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2, got %d", count)
+	}
+}
+
+func TestExtractEPUBChapter(t *testing.T) {
+	epubPath := makeMinimalEPUB(t)
+
+	blocks, dim, err := extractEPUBChapter(epubPath, 0)
+	if err != nil {
+		t.Fatalf("extractEPUBChapter(0): %v", err)
+	}
+	if dim != (PageDim{}) {
+		t.Errorf("expected zero PageDim for EPUB, got %+v", dim)
+	}
+	if len(blocks) == 0 {
+		t.Fatal("expected blocks, got none")
+	}
+	if blocks[0].Label != "title" {
+		t.Errorf("blocks[0].Label: want \"title\", got %q", blocks[0].Label)
+	}
+	if s, _ := blocks[0].Content.(string); s != "First Chapter" {
+		t.Errorf("blocks[0].Content: want \"First Chapter\", got %q", s)
+	}
+
+	blocks2, _, err := extractEPUBChapter(epubPath, 1)
+	if err != nil {
+		t.Fatalf("extractEPUBChapter(1): %v", err)
+	}
+	if blocks2[0].Label != "title" {
+		t.Errorf("chapter2 blocks[0].Label: want \"title\", got %q", blocks2[0].Label)
+	}
+}
+
+func TestExtractEPUBChapter_OutOfRange(t *testing.T) {
+	epubPath := makeMinimalEPUB(t)
+	_, _, err := extractEPUBChapter(epubPath, 99)
+	if err == nil {
+		t.Error("expected error for out-of-range index, got nil")
+	}
+}

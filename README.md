@@ -6,10 +6,10 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/mamorett/qocr.svg)](https://pkg.go.dev/github.com/mamorett/qocr)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A lightweight, **self-contained** CLI that extracts structured text from images and multi-page PDFs using either the **Baidu Unlimited-OCR** model (default), the **GLM-OCR** model, or the built-in **native text-layer extractor** (no inference engine needed, no GPU, no network) — all selectable via flags.
+A lightweight, **self-contained** CLI that extracts structured text from images, multi-page PDFs, and **EPUB books** using either the **Baidu Unlimited-OCR** model (default), the **GLM-OCR** model, or the built-in **native text-layer extractor** (no inference engine needed, no GPU, no network) — all selectable via flags.
 
 > [!IMPORTANT]
-> The `-native` mode requires **no inference engine**. It reads text directly from the PDF's embedded text layer. The AI-powered modes still require an OpenAI-compatible inference engine (such as **vLLM**). See the [Native Text Extraction](#-native-text-extraction-no-ocr) section for details.
+> The `-native` mode (PDF) and EPUB mode require **no inference engine**. They read text directly from the document's embedded text layer. The AI-powered modes still require an OpenAI-compatible inference engine (such as **vLLM**). See the [Native Text Extraction](#-native-text-extraction-no-ocr) and [EPUB Conversion](#-epub-conversion-no-ocr) sections for details.
 
 ---
 
@@ -87,9 +87,10 @@ qocr -endpoint http://10.0.0.5:8000 document.pdf
 
 - 🚀 **Zero Dependencies**: Built with pure Go + WebAssembly. No need for `poppler`, `mupdf`, or any system-level PDF tools.
 - 📦 **Self-Contained**: PDF rendering is embedded inside the binary. Single file, works everywhere.
-- 🔌 **Multi-Engine Support**: Powered by **Baidu Unlimited-OCR** by default (`-engine baidu`), with support for **GLM-OCR** (`-engine glm` / `-glm`) and the built-in **native text-layer extractor** (`-native`) — same CLI flags, same output formats.
+- 🔌 **Multi-Engine Support**: Powered by **Baidu Unlimited-OCR** by default (`-engine baidu`), with support for **GLM-OCR** (`-engine glm`) and the built-in **native text-layer extractor** (`-native`) — same CLI flags, same output formats.
 - 📑 **Robust Multi-Page PDF Support**: Renders pages locally, then dispatches to the engine — page-by-page by default (use `-batch-size` to group multiple pages per request for Baidu to leverage native multi-page reasoning), or sequentially for GLM-OCR.
 - 🔤 **Native Text Extraction**: For digitally-born PDFs, extract text, headings, and tables directly from the PDF's internal text layer with **zero inference** — offline, instant, GPU-free.
+- 📚 **EPUB Conversion**: Convert EPUB books to Markdown, HTML, JSON, LaTeX, or plain text — **no AI, no OCR, no network**. Auto-detected by file extension.
 - 🎯 **Multiple Outputs**: Get results in **Markdown**, **HTML**, **Plain Text**, **JSON**, or **LaTeX**.
 - 🌍 **Cross-Platform**: Compiled for Linux, macOS, and Windows (AMD64 & ARM64).
 
@@ -138,11 +139,12 @@ ocr [options] <file>
 | `-endpoint` | API base URL | `http://localhost:8080` |
 | `-port` | Override port in endpoint URL | `0` (uses port from endpoint) |
 | `-model` | Model name | `baidu/Unlimited-OCR` (or `zai-org/GLM-OCR` in glm mode) |
-| `-engine` | OCR engine to use: `baidu`, `glm`, `native`, or `hybrid` | `baidu` |
+| `-engine` | OCR engine to use: `baidu`, `glm`, `native`, `hybrid`, or `epub` | `baidu` |
 | `-baidu` | Use Baidu engine (alias for `-engine baidu`) | `false` |
 | `-glm` | Use GLM engine (alias for `-engine glm`) | `false` |
 | `-native` | Extract text from PDF text layer — no OCR, no AI, no network | `false` |
 | `-hybrid` | Use native PDF text with Baidu table OCR | `false` |
+| `-epub` | Force EPUB extraction mode (auto-detected by `.epub` extension) | `false` |
 | `-prompt` | Instruction sent with the file | Automatic prompt recipe (`<image>document parsing.` / `<image>Multi page parsing.`) |
 | `-output` | Write output to file instead of stdout | `stdout` |
 | `-dpi` | PDF rendering resolution | `200` |
@@ -203,6 +205,14 @@ qocr -endpoint http://192.168.0.12:4000 -model baidu/Unlimited-OCR document.pdf 
 For digitally-born PDFs — reports, papers, word-processor exports — extract text and tables instantly without any inference engine:
 ```bash
 qocr -native document.pdf -output result.md
+```
+
+### EPUB Conversion (No OCR)
+Convert any EPUB book to your desired output format instantly. The `.epub` extension is auto-detected — no flags needed:
+```bash
+qocr book.epub -output book.md
+qocr book.epub -json -output book.json
+qocr book.epub -latex -output book.tex
 ```
 
 ---
@@ -293,6 +303,49 @@ Headings are detected using **actual font size metadata from the PDF's internal 
 
 - **Scanned PDFs**: Produces empty output. Use the default OCR mode for scanned documents.
 - **Complex layouts**: Multi-column or magazine-style layouts may have reading-order issues. Use OCR mode for maximum fidelity.
+
+---
+
+## 📚 EPUB Conversion (No-OCR)
+
+For **EPUB books** — novels, textbooks, technical documentation, Project Gutenberg titles — qocr can extract text, headings, and tables **directly from the embedded XHTML** with zero inference engine, zero GPU, and zero network calls.
+
+The `.epub` extension is **auto-detected**; no flag is required:
+```bash
+qocr book.epub -output book.md
+```
+
+You can also force EPUB mode explicitly with `-epub` or `-engine epub`.
+
+> [!IMPORTANT]
+> If you pass an EPUB with an AI engine flag (e.g. `-baidu book.epub`), qocr will warn you and **automatically switch** to native EPUB extraction. EPUB files contain machine-readable XHTML text — no OCR is needed or beneficial.
+
+### How it works
+
+EPUB files are standard ZIP archives containing:
+- `META-INF/container.xml` → points to the OPF package file
+- An OPF file (`content.opf`) → lists all content items and the reading-order **spine**
+- XHTML chapter files referenced by the spine
+
+qocr reads the spine in order and converts each XHTML chapter to structured blocks:
+
+| XHTML element | OCRBlock label | Markdown output |
+|:---|:---|:---|
+| `<h1>`, `<h2>` | `title` | `# Heading` / `## Heading` |
+| `<h3>`–`<h6>` | `header` | `## Heading` |
+| `<p>` | `text` | Paragraph |
+| `<table>` | `table` | Markdown table |
+| `<figcaption>` | `caption` | *Italic caption* |
+| `<img>` | `image` | `![alt text]()` placeholder |
+| `<nav>`, `<script>`, `<style>` | — | Skipped |
+
+Tables are extracted as raw HTML and passed through the **same rendering pipeline** as PDF tables, so they are correctly converted to Markdown, LaTeX tabular environments, JSON blocks, etc.
+
+### Limitations
+
+- **DRM-protected EPUBs**: Cannot be read (the ZIP is encrypted). Remove DRM with a compatible tool first.
+- **Fixed-layout EPUBs**: Comics, picture books, and heavily graphical EPUBs may produce minimal text output since their content is image-based.
+- **Embedded fonts/styles**: Visual formatting (bold, italic within paragraphs) is stripped; only the text content is extracted.
 
 ---
 
