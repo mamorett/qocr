@@ -6,7 +6,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/mamorett/qocr.svg)](https://pkg.go.dev/github.com/mamorett/qocr)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A lightweight, **self-contained** CLI that extracts structured text from images and multi-page PDFs using either the **GLM-OCR** model, the **Baidu Unlimited-OCR** model, or the built-in **native text-layer extractor** (no inference engine needed, no GPU, no network) — all selectable via flags.
+A lightweight, **self-contained** CLI that extracts structured text from images and multi-page PDFs using either the **Baidu Unlimited-OCR** model (default), the **GLM-OCR** model, or the built-in **native text-layer extractor** (no inference engine needed, no GPU, no network) — all selectable via flags.
 
 > [!IMPORTANT]
 > The `-native` mode requires **no inference engine**. It reads text directly from the PDF's embedded text layer. The AI-powered modes still require an OpenAI-compatible inference engine (such as **vLLM**). See the [Native Text Extraction](#-native-text-extraction-no-ocr) section for details.
@@ -18,16 +18,6 @@ A lightweight, **self-contained** CLI that extracts structured text from images 
 ### Inference Engine
 
 The CLI sends rendered page images to a chat-completions endpoint. By default it expects the server at `http://localhost:8080`.
-
-**Quick start GLM-OCR  with vLLM (recommended):**
-
-```bash
-vllm serve zai-org/GLM-OCR \
-  --allowed-local-media-path / \
-  --port 8000 \
-  --gpu-memory-utilization 0.75 \
-  --speculative-config '{"method": "mtp", "num_speculative_tokens": 1}'
-```
 
 **Quick start Baidu Unlimited-OCR with vLLM (recommended):**
 
@@ -41,6 +31,16 @@ docker run --gpus all \
   --no-enable-prefix-caching \
   --mm-processor-cache-gb 0 \
   --tensor-parallel-size 1
+```
+
+**Quick start GLM-OCR with vLLM:**
+
+```bash
+vllm serve zai-org/GLM-OCR \
+  --allowed-local-media-path / \
+  --port 8000 \
+  --gpu-memory-utilization 0.75 \
+  --speculative-config '{"method": "mtp", "num_speculative_tokens": 1}'
 ```
 
 **Quick start with Ollama:**
@@ -88,7 +88,7 @@ qocr -endpoint http://10.0.0.5:8000 document.pdf
 - 🚀 **Zero Dependencies**: Built with pure Go + WebAssembly. No need for `poppler`, `mupdf`, or any system-level PDF tools.
 - 📦 **Self-Contained**: PDF rendering is embedded inside the binary. Single file, works everywhere.
 - 🔌 **Multi-Engine Support**: Powered by **Baidu Unlimited-OCR** by default (`-engine baidu`), with support for **GLM-OCR** (`-engine glm` / `-glm`) and the built-in **native text-layer extractor** (`-native`) — same CLI flags, same output formats.
-- 📑 **Robust Multi-Page PDF Support**: Renders pages locally, then dispatches to the engine — batched per request for Baidu to leverage native multi-page reasoning, or sequentially for GLM-OCR.
+- 📑 **Robust Multi-Page PDF Support**: Renders pages locally, then dispatches to the engine — page-by-page by default (use `-batch-size` to group multiple pages per request for Baidu to leverage native multi-page reasoning), or sequentially for GLM-OCR.
 - 🔤 **Native Text Extraction**: For digitally-born PDFs, extract text, headings, and tables directly from the PDF's internal text layer with **zero inference** — offline, instant, GPU-free.
 - 🎯 **Multiple Outputs**: Get results in **Markdown**, **HTML**, **Plain Text**, **JSON**, or **LaTeX**.
 - 🌍 **Cross-Platform**: Compiled for Linux, macOS, and Windows (AMD64 & ARM64).
@@ -153,7 +153,7 @@ ocr [options] <file>
 | `-json` | Output as structured JSON (includes dimensions & rotation metadata) | `false` |
 | `-latex` | Output as LaTeX document fragment (tables are auto-scaled) | `false` |
 | `-bbox` | Embed normalized bounding boxes as HTML comments in markdown | `false` |
-| `-batch-size` | Number of pages per request (Baidu mode only, defaults to all pages for bounded batching) | `0` (all pages when using Baidu) |
+| `-batch-size` | Number of pages per request (Baidu mode only, 0 = one per request) | `0` (one page per request) |
 | `-max-tokens` | Max tokens to generate (0 means use default: 8192 for baidu, unset for glm) | `0` |
 | `-raw` | Dump raw model response (debug) | `false` |
 | `-help` | Show usage information | `false` |
@@ -194,9 +194,9 @@ qocr -baidu document.pdf -output result.txt
 ```
 
 ### Using the Baidu Unlimited-OCR Engine
-Switch to Baidu's model with `-engine baidu` for a different prompt recipe and per-document batching:
+The Baidu engine is the default, so you can omit `-engine baidu` and just set a custom endpoint or model:
 ```bash
-qocr -engine baidu -endpoint http://192.168.0.12:4000 -model baidu/Unlimited-OCR document.pdf -latex -output result.tex
+qocr -endpoint http://192.168.0.12:4000 -model baidu/Unlimited-OCR document.pdf -latex -output result.tex
 ```
 
 ### Native PDF Extraction (No OCR)
@@ -211,7 +211,7 @@ qocr -native document.pdf -output result.md
 Both the **GLM-OCR** and **Baidu Unlimited-OCR** models require images as input. Since neither model can process raw PDF blobs directly, this CLI performs the following steps (engine-dependent behaviors are noted inline):
 
 1. **PDF Rendering**: Uses `go-pdfium` running on the `wazero` WebAssembly engine to render PDF pages into images. The default is **200 DPI**, which is optimal for balance between speed and OCR quality.
-2. **Sequential vs. Batched Processing**: With the default **`glm`** engine, pages are sent one at a time to avoid overwhelming the GPU or hitting context limits. With the **`baidu`** engine, all pages are sent in a single request to leverage the model's native multi-page reasoning — control batching via `-batch-size`. The CLI prints a beautiful, color-coded real-time dashboard of current progress and timing.
+2. **Sequential vs. Batched Processing**: With the **`glm`** engine, pages are sent one at a time to avoid overwhelming the GPU or hitting context limits. With the **`baidu`** engine, pages are sent one at a time by default (use `-batch-size` to group multiple pages into a single request for native multi-page reasoning). The CLI prints a beautiful, color-coded real-time dashboard of current progress and timing.
 3. **Automatic Resuming**: If `-resume` is enabled, the CLI computes a unique SHA-256 hash representing the input file (path, size, modification time) and API parameters (including the chosen engine). Every successfully processed page is saved locally to your system cache directory (`~/.cache/ocr-cli/` or equivalent). If interrupted, re-running the same command will restore all cached pages and skip API calls, resuming right where it left off. Cache files are cleaned up upon successful completion.
 4. **Structured Parsing**: The results are combined and parsed into the chosen format. Engine-specific output formats (GLM-OCR's JSON array of blocks, Baidu's markdown laced with `<|det|>` grounding tokens and `<PAGE>` page markers) are normalized into the requested output format. If the model returns mixed content, the CLI extracts the JSON part automatically.
 
