@@ -41,7 +41,7 @@ func run(args []string) error {
 	epubFlag := fs.Bool("epub", false, "Extract text from EPUB (auto-detected by extension; no OCR, no AI, no network)")
 	hybrid := fs.Bool("hybrid", false, "Use native PDF text with Baidu layout/table OCR for complex regions")
 	maxTokens := fs.Int("max-tokens", 0, "Max tokens to generate (0 means use default: unset for glm, 8192 for baidu)")
-	batchSize := fs.Int("batch-size", 0, "Number of pages per request for baidu (0 means all in one request)")
+	batchSize := fs.Int("batch-size", 0, "Number of pages per request for baidu (0 means one page per request)")
 
 	fs.Usage = func() {
 		PrintLogoTo(os.Stderr)
@@ -92,7 +92,7 @@ func run(args []string) error {
 					{"-endpoint <url>", "Inference server API base URL (default \"http://localhost:8080\")"},
 					{"-port <int>", "Override endpoint port"},
 					{"-max-tokens <N>", "Max tokens to generate per page (0 = default/auto)"},
-					{"-batch-size <N>", "Pages per request for Baidu engine (0 = all in one)"},
+					{"-batch-size <N>", "Pages per request for Baidu engine (0 = one page per request)"},
 				},
 			},
 			{
