@@ -55,7 +55,7 @@ If you are using **Ollama** (which runs on port `11434` by default), you can run
 > 
 > * **Option A (Zero-Setup Sweetspot):** Just run the CLI with a lower resolution of **`-dpi 75`** (requires no changes to Ollama):
 >   ```bash
->   ocr -endpoint http://localhost:11434 -model glm-ocr:latest -dpi 75 document.pdf
+>   qocr -endpoint http://localhost:11434 -model glm-ocr:latest -dpi 75 document.pdf
 >   ```
 > * **Option B (Use full 200 DPI):** Create a custom model in Ollama with expanded limits:
 >   1. Create a text file named `Modelfile` containing:
@@ -70,7 +70,7 @@ If you are using **Ollama** (which runs on port `11434` by default), you can run
 >      ```
 >   3. Run the CLI targeting the new model and Ollama endpoint:
 >      ```bash
->      ocr -endpoint http://localhost:11434 -model glm-ocr-large document.pdf
+>      qocr -endpoint http://localhost:11434 -model glm-ocr-large document.pdf
 >      ```
 
 **Remote server:**
@@ -89,22 +89,23 @@ qocr -endpoint http://10.0.0.5:8000 document.pdf
 - 📦 **Self-Contained**: PDF rendering is embedded inside the binary. Single file, works everywhere.
 - 🔌 **Multi-Engine Support**: Powered by **Baidu Unlimited-OCR** by default (`-engine baidu`), with support for **GLM-OCR** (`-engine glm`) and the built-in **native text-layer extractor** (`-native`) — same CLI flags, same output formats.
 - 📑 **Robust Multi-Page PDF Support**: Renders pages locally, then dispatches to the engine — page-by-page by default (use `-batch-size` to group multiple pages per request for Baidu to leverage native multi-page reasoning), or sequentially for GLM-OCR.
-- 🔤 **Native Text Extraction**: For digitally-born PDFs, extract text, headings, and tables directly from the PDF's internal text layer with **zero inference** — offline, instant, GPU-free.
+- 🔤 **Native Text Extraction**: For digitally-born PDFs, extract text directly from the PDF's internal text layer with **zero inference** — offline, instant, GPU-free. On tagged PDFs, headings and tables are recovered from the document's own structure tree.
+- 🧩 **Hybrid Mode**: Combine native PDF text with Baidu layout/table OCR for complex pages (`-hybrid`).
 - 📚 **EPUB Conversion**: Convert EPUB books to Markdown, HTML, JSON, LaTeX, or plain text — **no AI, no OCR, no network**. Auto-detected by file extension.
 - 🎯 **Multiple Outputs**: Get results in **Markdown**, **HTML**, **Plain Text**, **JSON**, or **LaTeX**.
-- 🌍 **Cross-Platform**: Compiled for Linux, macOS, and Windows (AMD64 & ARM64).
+- 🌍 **Cross-Platform**: Compiled for Linux (AMD64, ARM64, ARM), macOS, and Windows (AMD64 & ARM64).
 
 ---
 
 ## 🛠️ Build & Install
 
-Ensure you have **Go 1.25+** installed.
+Ensure you have **Go 1.26+** installed.
 
 ```bash
 # Build for your current platform (default target)
 make
 
-# Cross-compile for all supported platforms (linux, darwin, windows for amd64 & arm64)
+# Cross-compile for all supported platforms (linux amd64/arm64/arm, darwin & windows amd64/arm64)
 make build-all
 
 # Install to your Go bin directory
@@ -120,8 +121,6 @@ sudo cp dist/qocr /usr/local/bin/qocr  # Linux/macOS
 copy dist\qocr.exe "C:\Program Files\qocr\qocr.exe"  # Windows
 ```
 
-The resulting binaries will be placed in the `dist/` folder.
-
 ---
 
 ## 📖 Usage
@@ -129,7 +128,7 @@ The resulting binaries will be placed in the `dist/` folder.
 The CLI supports flags in any position (before or after the input file). You can use either a single dash `-` or a double dash `--`.
 
 ```bash
-ocr [options] <file>
+qocr [options] <file>
 ```
 
 ### Options
@@ -145,11 +144,11 @@ ocr [options] <file>
 | `-native` | Extract text from PDF text layer — no OCR, no AI, no network | `false` |
 | `-hybrid` | Use native PDF text with Baidu table OCR | `false` |
 | `-epub` | Force EPUB extraction mode (auto-detected by `.epub` extension) | `false` |
-| `-prompt` | Instruction sent with the file | Automatic prompt recipe (`<image>document parsing.` / `<image>Multi page parsing.`) |
+| `-prompt` | Instruction sent with the file | `Extract all text from this document` (Baidu engine auto-replaces this with `<image>document parsing.` / `<image>Multi page parsing.` based on page count) |
 | `-output` | Write output to file instead of stdout | `stdout` |
 | `-dpi` | PDF rendering resolution | `200` |
 | `-resume` | Resume previous execution if interrupted | `true` |
-| `-markdown` | Output as Markdown | `true` |
+| `-markdown` | Output as Markdown (the default format when no other format flag is set) | `false` |
 | `-html` | Output as HTML document (1:1 detection indexing with inline metadata) | `false` |
 | `-text` | Output as plain text (flattens tables) | `false` |
 | `-json` | Output as structured JSON (includes dimensions & rotation metadata) | `false` |
@@ -202,7 +201,7 @@ qocr -endpoint http://192.168.0.12:4000 -model baidu/Unlimited-OCR document.pdf 
 ```
 
 ### Native PDF Extraction (No OCR)
-For digitally-born PDFs — reports, papers, word-processor exports — extract text and tables instantly without any inference engine:
+For digitally-born PDFs — reports, papers, word-processor exports — extract text instantly without any inference engine (headings and tables are recovered too when the PDF is tagged):
 ```bash
 qocr -native document.pdf -output result.md
 ```
@@ -215,8 +214,15 @@ qocr book.epub -json -output book.json
 qocr book.epub -latex -output book.tex
 ```
 
+### Hybrid Mode (Native Text + Baidu Table OCR)
+Keep the PDF's native text layer and let Baidu re-OCR only the complex regions (tables, figures) — requires a running Baidu endpoint:
+```bash
+qocr -hybrid contract.pdf -output contract.md
+```
+
 ---
 
+## ⚙️ How It Works (AI Engines)
 
 Both the **GLM-OCR** and **Baidu Unlimited-OCR** models require images as input. Since neither model can process raw PDF blobs directly, this CLI performs the following steps (engine-dependent behaviors are noted inline):
 
@@ -265,7 +271,7 @@ qocr -engine baidu -model <your-vllm-model-id> -endpoint http://192.168.0.12:400
 
 ## 🔤 Native Text Extraction (No-OCR)
 
-For **digitally-born PDFs** — exported from Word, LaTeX, InDesign, or any PDF writer — qocr can extract text, headings, and tables **directly from the PDF's internal text layer** with zero inference engine, zero GPU, and zero network calls.
+For **digitally-born PDFs** — exported from Word, LaTeX, InDesign, or any PDF writer — qocr extracts text **directly from the PDF's internal text layer** with zero inference engine, zero GPU, and zero network calls. On **tagged PDFs**, headings and tables are recovered from the document's own structure tree.
 
 ```bash
 qocr -native document.pdf -output result.md
@@ -277,31 +283,16 @@ The native mode uses a **two-tier detection strategy**:
 
 #### Tier 1 — Tagged PDFs (Word exports, InDesign, PDF/UA, accessibility-compliant docs)
 
-Many professionally-produced PDFs embed a full **logical structure tree** with semantic `<Table>`, `<TR>`, `<TD>`, `<TH>`, `<H1>`–`<H6>`, `<P>` elements. When detected, qocr reads this tree directly via PDFium's `FPDF_StructTree` API — the document author's own structural intent, stored in the file. Table cells are extracted **exactly as authored**, with zero spatial guessing.
+Many professionally-produced PDFs embed a full **logical structure tree** with semantic `<Table>`, `<TR>`, `<TD>`, `<TH>`, `<H1>`–`<H6>`, `<P>` elements. When detected, qocr reads this tree directly via PDFium's `FPDF_StructTree` API — the document author's own structural intent, stored in the file. Table cells are extracted **exactly as authored**, with zero spatial guessing. Headings come from the document's own heading tags: `<H1>`/`<H2>` become title blocks, `<H3>`–`<H6>` become section headings.
 
 #### Tier 2 — Untagged PDFs (LaTeX output, older tools)
 
-For PDFs without a structure tree, qocr uses **[GxPDF](https://github.com/coregx/gxpdf)'s 4-Pass Hybrid table detection** — a pure-Go, MIT-licensed library with no CGO:
-
-- **Pass 1**: Gap detection (adaptive threshold)
-- **Pass 2**: Overlap detection (Tabula-inspired)
-- **Pass 3**: Alignment detection (geometric column clustering)
-- **Pass 4**: Multi-line cell merging
-
-#### Heading detection (both tiers)
-
-Headings are detected using **actual font size metadata from the PDF's internal font tables**, read via `GetPageTextStructured(CollectFontInformation=true)`. The modal (most-frequent) font size on the page becomes the body-text baseline:
-
-| Ratio vs. body font size | Markdown output |
-|:---|:---|
-| ≥ 1.6× | `## Heading` (title) |
-| ≥ 1.25× | `### Heading` (header) |
-| Bold at body size, short line | `### Heading` (header) |
-| Otherwise | Paragraph |
+For PDFs without a structure tree, qocr falls back to PDFium's plain text-stream extraction: the page text is emitted in reading order as paragraphs. No table or heading reconstruction is attempted in this tier — if you need tables or headings from an untagged PDF, use `-hybrid` or one of the OCR engines instead.
 
 ### Limitations
 
 - **Scanned PDFs**: Produces empty output. Use the default OCR mode for scanned documents.
+- **Untagged PDFs**: Without a structure tree there is no heading or table reconstruction (see Tier 2 above). Use `-hybrid` or an OCR engine when you need them.
 - **Complex layouts**: Multi-column or magazine-style layouts may have reading-order issues. Use OCR mode for maximum fidelity.
 
 ---
@@ -331,8 +322,8 @@ qocr reads the spine in order and converts each XHTML chapter to structured bloc
 
 | XHTML element | OCRBlock label | Markdown output |
 |:---|:---|:---|
-| `<h1>`, `<h2>` | `title` | `# Heading` / `## Heading` |
-| `<h3>`–`<h6>` | `header` | `## Heading` |
+| `<h1>`, `<h2>` | `title` | `## Heading` |
+| `<h3>`–`<h6>` | `header` | `### Heading` |
 | `<p>` | `text` | Paragraph |
 | `<table>` | `table` | Markdown table |
 | `<figcaption>` | `caption` | *Italic caption* |

@@ -231,6 +231,8 @@ func renderMarkdown(pages [][]OCRBlock, showBBox bool) string {
 					} else {
 						fmt.Fprintf(&sb, "## %s\n\n", content)
 					}
+				case "header":
+					fmt.Fprintf(&sb, "### %s\n\n", content)
 				case "figure", "caption":
 					fmt.Fprintf(&sb, "*%s*\n\n", content)
 				case "image":
@@ -292,6 +294,8 @@ func writeMarkdownBlock(sb *strings.Builder, b OCRBlock, showBBox bool) {
 		} else {
 			fmt.Fprintf(sb, "## %s\n\n", content)
 		}
+	case "header":
+		fmt.Fprintf(sb, "### %s\n\n", content)
 	case "figure", "caption":
 		fmt.Fprintf(sb, "*%s*\n\n", content)
 	case "image":
